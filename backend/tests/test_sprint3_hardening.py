@@ -126,6 +126,13 @@ def test_audit_logs_metrics_and_diagnostics(client):
     assert misconfigured
     assert any("missing" in hint.lower() for hint in misconfigured[0]["hints"])
 
+    network_diagnostics = client.get("/admin/diagnostics/network", headers=admin_h)
+    assert network_diagnostics.status_code == 200, network_diagnostics.text
+    net_payload = network_diagnostics.json()
+    assert "interfaces" in net_payload
+    assert isinstance(net_payload["interfaces"], list)
+    assert "has_multiple_active_networks" in net_payload
+
 
 def test_pilot_metrics_report(client, monkeypatch):
     admin_h, user_id, device_id = _setup_user_and_device(client, username="pilot-user")

@@ -32,6 +32,14 @@ curl http://localhost:8080/health
 - Zugriff nur über Tailnet-IPs (Default: `ENFORCE_IP_ALLOWLIST=true`, `100.64.0.0/10` + Tailscale IPv6).
 - Zusätzlich hostseitige Firewall-Regel auf `tailscale0` empfohlen.
 - Optional: Tailnet ACLs für Port `8080` auf den Server setzen.
+- Docker ist auf `network_mode: host` ausgelegt, damit WoL-Broadcasts im LAN/NIC-Routing zuverlässig funktionieren.
+
+### Multi-NIC + Reverse Proxy
+
+- Pro Device `broadcast` (oder `subnet_cidr`) passend zum Zielnetz setzen.
+- Optional `interface` (z.B. `eth0`) setzen, um ein NIC explizit zu wählen.
+- Für Containerbetrieb bevorzugt `source_ip` setzen (IP der passenden Host-NIC), da das stabil ohne zusätzliche Container-Caps funktioniert.
+- Hinter Reverse Proxy `TRUST_PROXY_HEADERS=true` und `TRUSTED_PROXY_CIDRS` auf die Proxy-IP/Netze setzen, damit Allowlist + Rate Limits die echte Client-IP nutzen.
 
 ## 2. Admin Bootstrap und Datenpflege
 
@@ -61,6 +69,7 @@ Zusätzliche Admin-APIs:
 Runbook/Release-Checklist:
 
 - `docs/sprint3-runbook-checklist.md`
+- `docs/deployment-guide.md` (Docker/non-Docker, with/without reverse proxy, multi-NIC WoL)
 ### Host per Admin API anlegen
 
 ```bash
@@ -75,6 +84,8 @@ curl -s http://localhost:8080/admin/hosts \
     "name":"NAS",
     "mac":"AA:BB:CC:DD:EE:FF",
     "broadcast":"192.168.178.255",
+    "source_ip":"192.168.178.2",
+    "interface":"eth0",
     "udp_port":9
   }'
 ```
@@ -83,7 +94,7 @@ curl -s http://localhost:8080/admin/hosts \
 
 ```bash
 docker compose exec wol-backend python -m app.cli add-user alice supersecret --role user
-docker compose exec wol-backend python -m app.cli add-host --name Proxmox --mac AA:BB:CC:DD:EE:FF --broadcast 192.168.178.255
+docker compose exec wol-backend python -m app.cli add-host --name Proxmox --mac AA:BB:CC:DD:EE:FF --broadcast 192.168.178.255 --source-ip 192.168.178.2 --interface eth0
 ```
 
 ## 3. API (MVP)
@@ -135,5 +146,5 @@ cd backend
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-APP_SECRET=dev-secret ADMIN_USER=admin ADMIN_PASS=admin123 uvicorn app.main:app --reload --port 8080
+APP_SECRET=dev-secret-please-change ADMIN_USER=admin ADMIN_PASS=admin123456 uvicorn app.main:app --reload --port 8080
 ```

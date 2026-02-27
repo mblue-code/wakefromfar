@@ -37,6 +37,7 @@ class HostOut(BaseModel):
     broadcast: str | None = None
     subnet_cidr: str | None = None
     udp_port: int = 9
+    source_ip: str | None = None
     display_name: str | None = None
     last_power_state: Literal["on", "off", "unknown"] = "unknown"
     last_power_checked_at: datetime | None = None
@@ -79,6 +80,7 @@ class AdminDeviceCreate(BaseModel):
     subnet_cidr: str | None = None
     udp_port: int = Field(default=9, ge=1, le=65535)
     interface: str | None = None
+    source_ip: str | None = None
     check_method: Literal["tcp", "icmp"] = "tcp"
     check_target: str | None = None
     check_port: int | None = Field(default=None, ge=1, le=65535)
@@ -93,6 +95,7 @@ class AdminDeviceUpdate(BaseModel):
     subnet_cidr: str | None = None
     udp_port: int | None = Field(default=None, ge=1, le=65535)
     interface: str | None = None
+    source_ip: str | None = None
     check_method: Literal["tcp", "icmp"] | None = None
     check_target: str | None = None
     check_port: int | None = Field(default=None, ge=1, le=65535)
@@ -108,6 +111,7 @@ class AdminDeviceOut(BaseModel):
     subnet_cidr: str | None = None
     udp_port: int
     interface: str | None = None
+    source_ip: str | None = None
     check_method: Literal["tcp", "icmp"] = "tcp"
     check_target: str | None = None
     check_port: int | None = None

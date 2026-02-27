@@ -2,6 +2,7 @@ package com.wakefromfar.wolrelay.ui
 
 import android.app.Application
 import android.net.Uri
+import androidx.annotation.StringRes
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -9,7 +10,9 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.CreationExtras
 import androidx.lifecycle.viewModelScope
+import com.wakefromfar.wolrelay.R
 import com.wakefromfar.wolrelay.data.ApiClient
+import com.wakefromfar.wolrelay.data.ApiException
 import com.wakefromfar.wolrelay.data.MyDeviceDto
 import com.wakefromfar.wolrelay.data.SecurePrefs
 import kotlinx.coroutines.launch
@@ -50,6 +53,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private fun tr(@StringRes resId: Int, vararg args: Any): String = getApplication<Application>().getString(resId, *args)
+
+    private fun messageOr(@StringRes fallbackResId: Int, ex: Exception): String {
+        if (ex is ApiException) {
+            return tr(fallbackResId)
+        }
+        return ex.message ?: tr(fallbackResId)
+    }
+
     fun updateBackendUrl(value: String) {
         state = state.copy(backendUrl = value)
     }
@@ -76,7 +88,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         state = state.copy(
             inviteToken = token,
             backendUrl = backendHint?.takeIf { it.isNotBlank() } ?: state.backendUrl,
-            info = "Invite-Link erkannt. Passwort setzen und Konto aktivieren.",
+            info = tr(R.string.info_invite_link_detected),
             error = null,
         )
     }
@@ -91,7 +103,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun login() {
         if (state.username.isBlank() || state.password.isBlank() || state.backendUrl.isBlank()) {
-            state = state.copy(error = "Backend URL, Username und Passwort sind Pflichtfelder.")
+            state = state.copy(error = tr(R.string.error_login_required_fields))
             return
         }
 
@@ -109,11 +121,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     token = response.token,
                     password = "",
                     isLoading = false,
-                    info = "Login erfolgreich.",
+                    info = tr(R.string.info_login_success),
                 )
                 refreshDevices()
             } catch (ex: Exception) {
-                state = state.copy(isLoading = false, error = ex.message ?: "Login fehlgeschlagen")
+                state = state.copy(isLoading = false, error = messageOr(R.string.error_login_failed, ex))
             }
         }
     }
@@ -121,15 +133,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun claimInvite() {
         val inviteToken = state.inviteToken
         if (inviteToken.isNullOrBlank()) {
-            state = state.copy(error = "Kein Invite-Token vorhanden.")
+            state = state.copy(error = tr(R.string.error_invite_token_missing))
             return
         }
         if (state.backendUrl.isBlank()) {
-            state = state.copy(error = "Backend URL ist erforderlich.")
+            state = state.copy(error = tr(R.string.error_backend_required))
             return
         }
         if (state.claimPassword.length < 12) {
-            state = state.copy(error = "Passwort muss mindestens 12 Zeichen haben.")
+            state = state.copy(error = tr(R.string.error_password_min_length, 12))
             return
         }
 
@@ -150,18 +162,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     claimPassword = "",
                     inviteToken = null,
                     isLoading = false,
-                    info = "Onboarding erfolgreich. Willkommen ${response.username}.",
+                    info = tr(R.string.info_onboarding_success, response.username),
                 )
                 refreshDevices()
             } catch (ex: Exception) {
-                state = state.copy(isLoading = false, error = ex.message ?: "Onboarding fehlgeschlagen")
+                state = state.copy(isLoading = false, error = messageOr(R.string.error_onboarding_failed, ex))
             }
         }
     }
 
     fun logout() {
         prefs.clearSession()
-        state = state.copy(token = null, devices = emptyList(), info = "Ausgeloggt")
+        state = state.copy(token = null, devices = emptyList(), info = tr(R.string.info_logged_out))
     }
 
     fun refreshDevices() {
@@ -172,7 +184,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val devices = api.listMyDevices(baseUrl = state.backendUrl, token = token)
                 state = state.copy(devices = devices, isLoading = false)
             } catch (ex: Exception) {
-                state = state.copy(isLoading = false, error = ex.message ?: "Geräte konnten nicht geladen werden")
+                state = state.copy(isLoading = false, error = messageOr(R.string.error_devices_load_failed, ex))
             }
         }
     }
@@ -184,15 +196,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 val res = api.wakeDevice(baseUrl = state.backendUrl, token = token, hostId = deviceId)
                 val msg = when (res.result) {
-                    "already_on" -> "Gerät ist bereits eingeschaltet."
-                    "sent" -> "Wake-Signal gesendet${res.sent_to?.let { " ($it)" } ?: ""}."
-                    "failed" -> "Wake fehlgeschlagen${res.error_detail?.let { ": $it" } ?: "."}"
+                    "already_on" -> tr(R.string.info_wake_already_on)
+                    "sent" -> tr(
+                        R.string.info_wake_signal_sent,
+                        res.sent_to?.let { tr(R.string.info_wake_signal_target, it) } ?: "",
+                    )
+                    "failed" -> tr(
+                        R.string.info_wake_failed,
+                        res.error_detail?.let { tr(R.string.info_wake_failed_detail, it) }
+                            ?: tr(R.string.info_wake_failed_no_detail),
+                    )
                     else -> res.message
                 }
                 state = state.copy(isLoading = false, info = msg)
                 refreshDevices()
             } catch (ex: Exception) {
-                state = state.copy(isLoading = false, error = ex.message ?: "Wake fehlgeschlagen")
+                state = state.copy(isLoading = false, error = messageOr(R.string.error_wake_failed, ex))
             }
         }
     }

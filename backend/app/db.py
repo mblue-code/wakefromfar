@@ -148,6 +148,10 @@ def _migration_003_admin_audit(conn: sqlite3.Connection) -> None:
     )
 
 
+def _migration_004_source_ip(conn: sqlite3.Connection) -> None:
+    _add_column_if_missing(conn, "hosts", "source_ip", "TEXT")
+
+
 def init_db() -> None:
     with get_conn() as conn:
         conn.execute(
@@ -166,6 +170,7 @@ def init_db() -> None:
             1: _migration_001_base_schema,
             2: _migration_002_sprint1,
             3: _migration_003_admin_audit,
+            4: _migration_004_source_ip,
         }
         for version in sorted(migrations.keys()):
             if version in applied:
@@ -265,6 +270,7 @@ def list_hosts() -> list[sqlite3.Row]:
                 subnet_cidr,
                 udp_port,
                 interface,
+                source_ip,
                 created_at,
                 display_name,
                 check_method,
@@ -292,6 +298,7 @@ def list_assigned_hosts(user_id: int) -> list[sqlite3.Row]:
                 h.subnet_cidr,
                 h.udp_port,
                 h.interface,
+                h.source_ip,
                 h.created_at,
                 h.display_name,
                 h.check_method,
@@ -335,6 +342,7 @@ def create_host(
     subnet_cidr: str | None,
     udp_port: int,
     interface: str | None,
+    source_ip: str | None,
     host_id: str | None = None,
     display_name: str | None = None,
     check_method: str = "tcp",
@@ -355,6 +363,7 @@ def create_host(
                 subnet_cidr,
                 udp_port,
                 interface,
+                source_ip,
                 created_at,
                 display_name,
                 check_method,
@@ -363,7 +372,7 @@ def create_host(
                 last_power_state,
                 last_power_checked_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'unknown', NULL)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'unknown', NULL)
             """,
             (
                 generated_id,
@@ -374,6 +383,7 @@ def create_host(
                 subnet_cidr,
                 udp_port,
                 interface,
+                source_ip,
                 now,
                 display_name,
                 check_method,

@@ -24,6 +24,8 @@ class Settings(BaseSettings):
         default="100.64.0.0/10,fd7a:115c:a1e0::/48,127.0.0.1/32,::1/128",
         alias="IP_ALLOWLIST_CIDRS",
     )
+    trust_proxy_headers: bool = Field(default=False, alias="TRUST_PROXY_HEADERS")
+    trusted_proxy_cidrs: str = Field(default="127.0.0.1/32,::1/128", alias="TRUSTED_PROXY_CIDRS")
 
     login_rate_limit_per_minute: int = Field(default=5, alias="LOGIN_RATE_LIMIT_PER_MINUTE")
     onboarding_rate_limit_per_minute: int = Field(default=5, alias="ONBOARDING_RATE_LIMIT_PER_MINUTE")
@@ -41,6 +43,10 @@ class Settings(BaseSettings):
     @property
     def allowed_cidrs(self) -> list[str]:
         return [part.strip() for part in self.ip_allowlist_cidrs.split(",") if part.strip()]
+
+    @property
+    def trusted_proxy_cidrs_list(self) -> list[str]:
+        return [part.strip() for part in self.trusted_proxy_cidrs.split(",") if part.strip()]
 
 
 @lru_cache

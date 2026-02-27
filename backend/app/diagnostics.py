@@ -31,6 +31,8 @@ def device_diagnostic_hints(host: dict, stale_after_seconds: int = 60) -> list[s
 
     if not host.get("broadcast") and not host.get("subnet_cidr"):
         hints.append("WoL target uses global broadcast; set broadcast/subnet for reliability.")
+    if host.get("broadcast") and not host.get("source_ip") and not host.get("interface"):
+        hints.append("Set source_ip or interface for deterministic routing on multi-NIC senders.")
 
     if (host.get("last_power_state") or "unknown") == "unknown":
         hints.append("Last power state is unknown; verify check target, port, and routing.")

@@ -51,6 +51,7 @@ from .db import (
     update_user_role,
     upsert_admin,
 )
+from .network import build_network_diagnostics_snapshot
 from .power import PowerCheckResult, run_power_check
 from .schemas import (
     AdminDeviceCreate,
@@ -84,18 +85,106 @@ auth_scheme = HTTPBearer(auto_error=True)
 LOGIN_ATTEMPTS: dict[str, deque[datetime]] = defaultdict(deque)
 ONBOARDING_ATTEMPTS: dict[str, deque[datetime]] = defaultdict(deque)
 WAKE_ATTEMPTS: dict[str, deque[datetime]] = defaultdict(deque)
+_NETWORK_DIAGNOSTICS: dict[str, object] = {}
+_UNSAFE_APP_SECRETS = {"change-me", "replace-with-a-random-long-secret"}
+_UNSAFE_ADMIN_PASSWORDS = {"change-me-admin-password", "replace-with-strong-password"}
 
 
 def _init_bootstrap() -> None:
     settings = get_settings()
+    if settings.app_secret in _UNSAFE_APP_SECRETS:
+        raise RuntimeError(
+            "APP_SECRET uses an unsafe placeholder value. Set APP_SECRET to a random secret before startup."
+        )
+    if len(settings.app_secret) < 16:
+        raise RuntimeError("APP_SECRET is too short. Use at least 16 characters.")
+    if settings.admin_pass and settings.admin_pass in _UNSAFE_ADMIN_PASSWORDS:
+        raise RuntimeError(
+            "ADMIN_PASS uses an unsafe placeholder value. Set ADMIN_PASS to a unique password before startup."
+        )
+    if settings.admin_pass and len(settings.admin_pass) < 12:
+        raise RuntimeError("ADMIN_PASS is too short. Use at least 12 characters.")
     init_db()
     if settings.admin_user and settings.admin_pass:
         upsert_admin(settings.admin_user, hash_password(settings.admin_pass))
 
 
+def _refresh_network_diagnostics() -> None:
+    global _NETWORK_DIAGNOSTICS
+    try:
+        snapshot = build_network_diagnostics_snapshot()
+        _NETWORK_DIAGNOSTICS = snapshot
+        structured_log(
+            "network.discovery.completed",
+            interface_count=snapshot["interface_count"],
+            active_ipv4_interface_count=snapshot["active_ipv4_interface_count"],
+            detected_ipv4_networks=snapshot["detected_ipv4_networks"],
+            has_multiple_active_networks=snapshot["has_multiple_active_networks"],
+        )
+    except Exception as exc:  # pragma: no cover
+        _NETWORK_DIAGNOSTICS = {
+            "discovered_at": datetime.now(UTC).isoformat(),
+            "interface_count": 0,
+            "active_ipv4_interface_count": 0,
+            "active_ipv4_interfaces": [],
+            "detected_ipv4_networks": [],
+            "has_multiple_active_networks": False,
+            "interfaces": [],
+            "error": str(exc),
+        }
+        structured_log("network.discovery.failed", error=str(exc))
+
+
 @app.on_event("startup")
 def on_startup() -> None:
     _init_bootstrap()
+    _refresh_network_diagnostics()
+
+
+def _parse_ip(value: str | None) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    if not value:
+        return None
+    try:
+        return ipaddress.ip_address(value.strip())
+    except ValueError:
+        return None
+
+
+def _extract_forwarded_ip(request: Request) -> str | None:
+    forwarded_for = request.headers.get("x-forwarded-for")
+    if forwarded_for:
+        first = forwarded_for.split(",")[0].strip()
+        if _parse_ip(first):
+            return first
+    real_ip = request.headers.get("x-real-ip")
+    if real_ip and _parse_ip(real_ip):
+        return real_ip.strip()
+    return None
+
+
+def _is_in_networks(ip_text: str, cidrs: list[str]) -> bool:
+    ip_obj = _parse_ip(ip_text)
+    if not ip_obj:
+        return False
+    for cidr in cidrs:
+        try:
+            if ip_obj in ipaddress.ip_network(cidr, strict=False):
+                return True
+        except ValueError:
+            continue
+    return False
+
+
+def _get_request_ip(request: Request) -> str | None:
+    settings = get_settings()
+    peer_ip = request.client.host if request.client else None
+    if settings.trust_proxy_headers and peer_ip and _is_in_networks(peer_ip, settings.trusted_proxy_cidrs_list):
+        forwarded_ip = _extract_forwarded_ip(request)
+        if forwarded_ip:
+            return forwarded_ip
+    if peer_ip and _parse_ip(peer_ip):
+        return peer_ip
+    return None
 
 
 @app.middleware("http")
@@ -104,16 +193,11 @@ async def allowlist_middleware(request: Request, call_next):
     if not settings.enforce_ip_allowlist:
         return await call_next(request)
 
-    client_ip = request.client.host if request.client else None
+    client_ip = _get_request_ip(request)
     if not client_ip:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Missing client IP")
 
-    allowed = False
-    ip_obj = ipaddress.ip_address(client_ip)
-    for cidr in settings.allowed_cidrs:
-        if ip_obj in ipaddress.ip_network(cidr, strict=False):
-            allowed = True
-            break
+    allowed = _is_in_networks(client_ip, settings.allowed_cidrs)
 
     if not allowed:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Client IP not allowed")
@@ -173,6 +257,7 @@ def _host_to_legacy_out(row: dict, is_stale: bool | None = None) -> HostOut:
         broadcast=row["broadcast"],
         subnet_cidr=row["subnet_cidr"],
         udp_port=row["udp_port"],
+        source_ip=row["source_ip"],
         display_name=row["display_name"],
         last_power_state=row["last_power_state"] or "unknown",
         last_power_checked_at=row["last_power_checked_at"],
@@ -191,6 +276,7 @@ def _host_to_admin_out(row: dict) -> AdminDeviceOut:
         subnet_cidr=row["subnet_cidr"],
         udp_port=row["udp_port"],
         interface=row["interface"],
+        source_ip=row["source_ip"],
         check_method=row["check_method"] or "tcp",
         check_target=row["check_target"],
         check_port=row["check_port"],
@@ -272,13 +358,25 @@ def _run_and_persist_power_check(host_row: dict) -> PowerCheckResponse:
     )
 
 
-def _send_magic_packet_with_retry(mac: str, target_ip: str, udp_port: int, interface: str | None) -> tuple[bool, str | None]:
+def _send_magic_packet_with_retry(
+    mac: str,
+    target_ip: str,
+    udp_port: int,
+    interface: str | None,
+    source_ip: str | None,
+) -> tuple[bool, str | None]:
     settings = get_settings()
     max_attempts = max(1, settings.wake_send_max_attempts)
     last_error: str | None = None
     for attempt in range(max_attempts):
         try:
-            send_magic_packet(mac=mac, target_ip=target_ip, udp_port=udp_port, interface=interface)
+            send_magic_packet(
+                mac=mac,
+                target_ip=target_ip,
+                udp_port=udp_port,
+                interface=interface,
+                source_ip=source_ip,
+            )
             if attempt > 0:
                 increment_counter("wake.retry.success")
             return True, None
@@ -312,7 +410,7 @@ def _run_background_power_check(host_id: str) -> None:
 def login(body: LoginRequest, request: Request) -> LoginResponse:
     settings = get_settings()
     now = datetime.now(UTC)
-    ip = request.client.host if request.client else "unknown"
+    ip = _get_request_ip(request) or "unknown"
 
     _clean_attempts(LOGIN_ATTEMPTS, ip, now)
     if len(LOGIN_ATTEMPTS[ip]) >= settings.login_rate_limit_per_minute:
@@ -336,7 +434,7 @@ def login(body: LoginRequest, request: Request) -> LoginResponse:
 @app.post("/onboarding/claim", response_model=OnboardingClaimResponse)
 def onboarding_claim(body: OnboardingClaimRequest, request: Request) -> OnboardingClaimResponse:
     settings = get_settings()
-    ip = request.client.host if request.client else "unknown"
+    ip = _get_request_ip(request) or "unknown"
     _enforce_rate_limit(
         ONBOARDING_ATTEMPTS,
         ip,
@@ -369,16 +467,21 @@ def onboarding_claim(body: OnboardingClaimRequest, request: Request) -> Onboardi
         structured_log("onboarding.failed", ip=ip, reason="invite_user_not_found")
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invite user not found")
 
-    updated = update_user_password(username=user["username"], password_hash=hash_password(body.password))
-    if not updated:
-        increment_counter("onboarding.failed")
-        structured_log("onboarding.failed", ip=ip, reason="password_update_failed", username=user["username"])
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Could not set password")
     claimed = claim_invite(invite_id=invite["id"], claimed_at=now.isoformat())
     if not claimed:
         increment_counter("onboarding.failed")
         structured_log("onboarding.failed", ip=ip, reason="claim_race", username=user["username"])
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Invite token already claimed")
+    updated = update_user_password(username=user["username"], password_hash=hash_password(body.password))
+    if not updated:
+        increment_counter("onboarding.failed")
+        structured_log(
+            "onboarding.failed",
+            ip=ip,
+            reason="password_update_failed_after_claim",
+            username=user["username"],
+        )
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Could not set password")
 
     token, expires_in = create_token(username=user["username"], role=user["role"])
     increment_counter("onboarding.success")
@@ -409,6 +512,7 @@ def wake_host_legacy(host_id: str, current_user: Annotated[dict, Depends(get_cur
         target_ip=target_ip,
         udp_port=udp_port,
         interface=row["interface"],
+        source_ip=row["source_ip"],
     )
     if not sent_ok:
         log_wake(
@@ -460,7 +564,7 @@ def me_power_check(host_id: str, current_user: Annotated[dict, Depends(get_curre
 @app.post("/me/devices/{host_id}/wake", response_model=MeWakeResponse)
 def me_wake(host_id: str, request: Request, current_user: Annotated[dict, Depends(get_current_user)]) -> MeWakeResponse:
     settings = get_settings()
-    ip = request.client.host if request.client else "unknown"
+    ip = _get_request_ip(request) or "unknown"
     rate_key = f"{current_user['username']}@{ip}"
     _enforce_rate_limit(
         WAKE_ATTEMPTS,
@@ -499,6 +603,7 @@ def me_wake(host_id: str, request: Request, current_user: Annotated[dict, Depend
         target_ip=target_ip,
         udp_port=udp_port,
         interface=host["interface"],
+        source_ip=host["source_ip"],
     )
     if not sent_ok:
         log_wake(
@@ -700,6 +805,7 @@ def admin_create_device(
         subnet_cidr=body.subnet_cidr,
         udp_port=body.udp_port,
         interface=body.interface,
+        source_ip=body.source_ip,
         display_name=body.display_name,
         check_method=body.check_method,
         check_target=body.check_target,
@@ -986,6 +1092,13 @@ def admin_device_diagnostics(_: Annotated[dict, Depends(require_admin)]) -> list
         }
         for row in list_hosts()
     ]
+
+
+@app.get("/admin/diagnostics/network")
+def admin_network_diagnostics(_: Annotated[dict, Depends(require_admin)]) -> dict[str, object]:
+    if not _NETWORK_DIAGNOSTICS:
+        _refresh_network_diagnostics()
+    return _NETWORK_DIAGNOSTICS
 
 
 def _parse_iso_dt(value: str | None) -> datetime | None:

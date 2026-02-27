@@ -32,6 +32,7 @@ def test_new_endpoints_smoke(client, monkeypatch):
             "name": "Lab-PC",
             "mac": "10:20:30:40:50:60",
             "broadcast": "10.0.0.255",
+            "source_ip": "10.0.0.2",
             "udp_port": 9,
             "check_method": "tcp",
             "check_target": "10.0.0.10",
@@ -43,7 +44,7 @@ def test_new_endpoints_smoke(client, monkeypatch):
 
     devices_res = client.get("/admin/devices", headers=admin_h)
     assert devices_res.status_code == 200, devices_res.text
-    assert any(row["id"] == device_id for row in devices_res.json())
+    assert any(row["id"] == device_id and row["source_ip"] == "10.0.0.2" for row in devices_res.json())
 
     assign_res = client.post(
         "/admin/assignments",

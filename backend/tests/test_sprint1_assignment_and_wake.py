@@ -25,6 +25,7 @@ def _setup_user_and_device(client):
             "display_name": "Home NAS",
             "mac": "AA:BB:CC:DD:EE:FF",
             "broadcast": "192.168.1.255",
+            "source_ip": "192.168.1.2",
             "udp_port": 9,
             "check_method": "tcp",
             "check_target": "192.168.1.10",
@@ -101,8 +102,14 @@ def test_wake_returns_sent_when_precheck_off_and_send_succeeds(client, monkeypat
 
     sent_calls: list[tuple] = []
 
-    def fake_send_magic_packet(mac: str, target_ip: str, udp_port: int = 9, interface: str | None = None):
-        sent_calls.append((mac, target_ip, udp_port, interface))
+    def fake_send_magic_packet(
+        mac: str,
+        target_ip: str,
+        udp_port: int = 9,
+        interface: str | None = None,
+        source_ip: str | None = None,
+    ):
+        sent_calls.append((mac, target_ip, udp_port, interface, source_ip))
 
     monkeypatch.setattr("app.main.send_magic_packet", fake_send_magic_packet)
 
@@ -113,6 +120,7 @@ def test_wake_returns_sent_when_precheck_off_and_send_succeeds(client, monkeypat
     assert payload["precheck_state"] == "off"
     assert payload["sent_to"] == "192.168.1.255:9"
     assert len(sent_calls) == 1
+    assert sent_calls[0][4] == "192.168.1.2"
 
 
 def test_wake_returns_failed_when_send_raises(client, monkeypatch):

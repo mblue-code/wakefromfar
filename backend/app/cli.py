@@ -25,6 +25,7 @@ def _build_parser() -> argparse.ArgumentParser:
     add_host.add_argument("--subnet-cidr")
     add_host.add_argument("--udp-port", type=int, default=9)
     add_host.add_argument("--interface")
+    add_host.add_argument("--source-ip")
 
     sub.add_parser("list-hosts", help="List configured hosts")
 
@@ -54,6 +55,7 @@ def main() -> None:
             subnet_cidr=args.subnet_cidr,
             udp_port=args.udp_port,
             interface=args.interface,
+            source_ip=args.source_ip,
         )
         print(f"Created host '{args.name}' with id {host_id}")
         return

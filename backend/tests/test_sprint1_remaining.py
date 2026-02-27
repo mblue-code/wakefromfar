@@ -46,6 +46,37 @@ def test_onboarding_claim_flow(client):
     assert double_claim_res.status_code == 409
 
 
+def test_onboarding_does_not_change_password_when_claim_fails(client, monkeypatch):
+    admin_token = login(client, "admin", "adminpass123456")
+    admin_h = auth_headers(admin_token)
+
+    create_user_res = client.post(
+        "/admin/users",
+        headers=admin_h,
+        json={"username": "eve-race", "password": "initialpassword12", "role": "user"},
+    )
+    assert create_user_res.status_code == 201, create_user_res.text
+
+    invite_res = client.post(
+        "/admin/invites",
+        headers=admin_h,
+        json={"username": "eve-race", "backend_url_hint": "http://relay.internal", "expires_in_hours": 4},
+    )
+    assert invite_res.status_code == 201, invite_res.text
+    invite_token = invite_res.json()["token"]
+
+    monkeypatch.setattr("app.main.claim_invite", lambda *_args, **_kwargs: False)
+    claim_res = client.post(
+        "/onboarding/claim",
+        json={"token": invite_token, "password": "newclaimedpass12"},
+    )
+    assert claim_res.status_code == 409
+
+    # Original password must still be valid when claim fails.
+    eve_token = login(client, "eve-race", "initialpassword12")
+    assert eve_token
+
+
 def test_admin_user_and_device_patch_delete(client):
     admin_token = login(client, "admin", "adminpass123456")
     admin_h = auth_headers(admin_token)

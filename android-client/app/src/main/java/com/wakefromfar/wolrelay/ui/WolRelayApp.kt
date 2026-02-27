@@ -24,10 +24,12 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import com.wakefromfar.wolrelay.R
 import com.wakefromfar.wolrelay.data.MyDeviceDto
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -49,12 +51,18 @@ fun WolRelayApp(vm: MainViewModel) {
             topBar = {
                 TopAppBar(
                     title = {
-                        Text(if (state.isAuthenticated) "My Devices" else "WakeFromFar")
+                        Text(
+                            if (state.isAuthenticated) {
+                                stringResource(R.string.title_my_devices)
+                            } else {
+                                stringResource(R.string.title_app)
+                            },
+                        )
                     },
                     actions = {
                         if (state.isAuthenticated) {
-                            TextButton(onClick = vm::refreshDevices) { Text("Refresh") }
-                            TextButton(onClick = vm::logout) { Text("Logout") }
+                            TextButton(onClick = vm::refreshDevices) { Text(stringResource(R.string.action_refresh)) }
+                            TextButton(onClick = vm::logout) { Text(stringResource(R.string.action_logout)) }
                         }
                     },
                 )
@@ -109,29 +117,30 @@ private fun InviteClaimScreen(
     onUseLogin: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val tokenPreview = state.inviteToken?.take(10) ?: "-"
     Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("Invite erkannt", style = MaterialTheme.typography.titleLarge)
-        Text("Token: ${state.inviteToken?.take(10) ?: "-"}...")
+        Text(stringResource(R.string.invite_detected), style = MaterialTheme.typography.titleLarge)
+        Text(stringResource(R.string.invite_token_preview, tokenPreview))
         OutlinedTextField(
             value = state.backendUrl,
             onValueChange = onBackendUrlChange,
-            label = { Text("Backend URL") },
+            label = { Text(stringResource(R.string.label_backend_url)) },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
         OutlinedTextField(
             value = state.claimPassword,
             onValueChange = onClaimPasswordChange,
-            label = { Text("Neues Passwort") },
+            label = { Text(stringResource(R.string.label_new_password)) },
             visualTransformation = PasswordVisualTransformation(),
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
         Button(onClick = onClaim, enabled = !state.isLoading, modifier = Modifier.fillMaxWidth()) {
-            Text("Konto aktivieren")
+            Text(stringResource(R.string.button_activate_account))
         }
         TextButton(onClick = onUseLogin, enabled = !state.isLoading) {
-            Text("Stattdessen normal anmelden")
+            Text(stringResource(R.string.action_use_regular_login))
         }
         if (state.isLoading) {
             CircularProgressIndicator()
@@ -152,27 +161,27 @@ private fun LoginScreen(
         OutlinedTextField(
             value = state.backendUrl,
             onValueChange = onBackendUrlChange,
-            label = { Text("Backend URL") },
+            label = { Text(stringResource(R.string.label_backend_url)) },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
         OutlinedTextField(
             value = state.username,
             onValueChange = onUsernameChange,
-            label = { Text("Username") },
+            label = { Text(stringResource(R.string.label_username)) },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
         OutlinedTextField(
             value = state.password,
             onValueChange = onPasswordChange,
-            label = { Text("Passwort") },
+            label = { Text(stringResource(R.string.label_password)) },
             visualTransformation = PasswordVisualTransformation(),
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
         Button(onClick = onLogin, enabled = !state.isLoading, modifier = Modifier.fillMaxWidth()) {
-            Text("Login")
+            Text(stringResource(R.string.button_login))
         }
         if (state.isLoading) {
             CircularProgressIndicator()
@@ -192,7 +201,7 @@ private fun DeviceListScreen(
             CircularProgressIndicator()
         }
         if (devices.isEmpty() && !isLoading) {
-            Text("Keine zugewiesenen Geräte.")
+            Text(stringResource(R.string.text_no_assigned_devices))
         }
         LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             items(devices, key = { it.id }) { device ->
@@ -209,24 +218,31 @@ private fun DeviceCard(device: MyDeviceDto, onWake: (String) -> Unit) {
         "off" -> Color(0xFFC62828)
         else -> Color(0xFF6B7280)
     }
+    val stateLabel = when (device.last_power_state.lowercase()) {
+        "on" -> stringResource(R.string.state_on)
+        "off" -> stringResource(R.string.state_off)
+        else -> stringResource(R.string.state_unknown)
+    }
+    val lastCheckedAt = device.last_power_checked_at ?: stringResource(R.string.last_checked_never)
+    val staleSuffix = if (device.is_stale) stringResource(R.string.last_checked_stale_suffix) else ""
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(text = device.display_name ?: device.name, style = MaterialTheme.typography.titleMedium)
-            Text(text = "MAC: ${device.mac}", style = MaterialTheme.typography.bodySmall)
+            Text(text = stringResource(R.string.label_mac, device.mac), style = MaterialTheme.typography.bodySmall)
             AssistChip(
                 onClick = {},
-                label = { Text("State: ${device.last_power_state}") },
+                label = { Text(stringResource(R.string.label_state, stateLabel)) },
                 colors = androidx.compose.material3.AssistChipDefaults.assistChipColors(
                     labelColor = stateColor,
                 ),
             )
             Text(
-                text = "Last checked: ${device.last_power_checked_at ?: "never"}${if (device.is_stale) " (stale)" else ""}",
+                text = stringResource(R.string.label_last_checked, lastCheckedAt, staleSuffix),
                 style = MaterialTheme.typography.bodySmall,
             )
             Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
                 Button(onClick = { onWake(device.id) }) {
-                    Text("Wake")
+                    Text(stringResource(R.string.button_wake))
                 }
             }
         }
