@@ -1,0 +1,20 @@
+services:
+  wol-backend:
+    build:
+      context: ./backend
+    container_name: wol-backend
+    restart: unless-stopped
+    environment:
+      APP_SECRET: ${APP_SECRET:-change-me}
+      ADMIN_USER: ${ADMIN_USER:-admin}
+      ADMIN_PASS: ${ADMIN_PASS:-change-me-admin-password}
+      DATA_DIR: /data
+      DB_FILENAME: wol.db
+      TOKEN_EXPIRES_SECONDS: 86400
+      ENFORCE_IP_ALLOWLIST: ${ENFORCE_IP_ALLOWLIST:-true}
+      IP_ALLOWLIST_CIDRS: ${IP_ALLOWLIST_CIDRS:-100.64.0.0/10,fd7a:115c:a1e0::/48,127.0.0.1/32,::1/128}
+      LOGIN_RATE_LIMIT_PER_MINUTE: 5
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/data

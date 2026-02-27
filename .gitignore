@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+*.sqlite
+.venv/
+
+# Data and env
+.env
+data/
+
+# IDE
+.idea/
+.vscode/
+
+# Android
+android-client/.gradle/
+android-client/local.properties
+android-client/**/build/
