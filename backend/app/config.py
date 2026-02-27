@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     app_secret: str = Field(default="change-me", alias="APP_SECRET")
-    token_expires_seconds: int = Field(default=86_400, alias="TOKEN_EXPIRES_SECONDS")
+    token_expires_seconds: int = Field(default=28_800, alias="TOKEN_EXPIRES_SECONDS")
 
     data_dir: Path = Field(default=Path("/data"), alias="DATA_DIR")
     db_filename: str = Field(default="wol.db", alias="DB_FILENAME")
@@ -26,6 +26,13 @@ class Settings(BaseSettings):
     )
 
     login_rate_limit_per_minute: int = Field(default=5, alias="LOGIN_RATE_LIMIT_PER_MINUTE")
+    onboarding_rate_limit_per_minute: int = Field(default=5, alias="ONBOARDING_RATE_LIMIT_PER_MINUTE")
+    wake_rate_limit_per_minute: int = Field(default=20, alias="WAKE_RATE_LIMIT_PER_MINUTE")
+
+    wake_send_max_attempts: int = Field(default=2, alias="WAKE_SEND_MAX_ATTEMPTS")
+    wake_send_backoff_ms: int = Field(default=150, alias="WAKE_SEND_BACKOFF_MS")
+    power_check_timeout_seconds: float = Field(default=1.5, alias="POWER_CHECK_TIMEOUT_SECONDS")
+    power_state_stale_seconds: int = Field(default=20, alias="POWER_STATE_STALE_SECONDS")
 
     @property
     def db_path(self) -> Path:

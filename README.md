@@ -37,6 +37,30 @@ curl http://localhost:8080/health
 
 Initialer Admin wird aus ENV angelegt (`ADMIN_USER`, `ADMIN_PASS`), falls User noch nicht existiert.
 
+### Admin Panel (Sprint 2)
+
+- URL: `http://localhost:8080/admin/ui/login`
+- Login mit Admin-User (`ADMIN_USER` / `ADMIN_PASS` oder API-angelegter Admin).
+- Verfügbare Seiten:
+  - Users CRUD
+  - Devices CRUD inkl. "Test Power Check"
+  - Assignments
+  - Invite-Generierung inkl. Deep-Link + QR
+  - Wake- und Power-Check-Logs mit Filtern
+  - Diagnostics, Audit Logs, Metrics, Pilot Metrics (Sprint 3)
+
+### Hardening / Sprint 3
+
+Zusätzliche Admin-APIs:
+
+- `GET /admin/audit-logs`
+- `GET /admin/metrics`
+- `GET /admin/diagnostics/devices`
+- `GET /admin/pilot-metrics`
+
+Runbook/Release-Checklist:
+
+- `docs/sprint3-runbook-checklist.md`
 ### Host per Admin API anlegen
 
 ```bash
@@ -65,10 +89,17 @@ docker compose exec wol-backend python -m app.cli add-host --name Proxmox --mac 
 ## 3. API (MVP)
 
 - `POST /auth/login`
-- `GET /hosts` (auth)
-- `POST /hosts/{id}/wake` (auth)
+- `POST /onboarding/claim`
+- `GET /me/devices` (auth)
+- `POST /me/devices/{id}/wake` (auth)
+- `POST /me/devices/{id}/power-check` (auth)
 - `POST /admin/users` (admin)
-- `POST /admin/hosts` (admin)
+- `GET/POST/PATCH/DELETE /admin/users` (admin)
+- `GET/POST/PATCH/DELETE /admin/devices` (admin)
+- `GET/POST/DELETE /admin/assignments` (admin)
+- `GET/POST /admin/invites` + `POST /admin/invites/{id}/revoke` (admin)
+- `GET /admin/wake-logs`, `GET /admin/power-check-logs` (admin)
+- Legacy (deprecated): `GET /hosts`, `POST /hosts/{id}/wake`, `POST /admin/hosts`
 
 Beispiel Login Body:
 
@@ -83,13 +114,14 @@ Beispiel Login Body:
 
 `android-client/` in Android Studio öffnen, Gradle sync durchführen, auf Gerät/Emulator starten.
 
-MVP Features:
+Sprint-2 Features:
 
 - Login mit Username/Passwort
-- Backend URL konfigurierbar
+- Invite-Deep-Link handling (`wakefromfar://claim?...`)
+- Onboarding-Claim Flow über Invite-Token
 - Token + URL in `EncryptedSharedPreferences`
-- Hostliste laden
-- Wake pro Host auslösen
+- "My Devices" (`/me/devices`) mit Power-State Badge
+- Wake mit `already_on`/`sent`/`failed` Messaging
 
 Hinweis:
 

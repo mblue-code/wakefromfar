@@ -4,17 +4,37 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.wakefromfar.wolrelay.ui.MainViewModel
 import com.wakefromfar.wolrelay.ui.WolRelayApp
+import kotlinx.coroutines.flow.MutableStateFlow
 
 class MainActivity : ComponentActivity() {
+    private val pendingDeepLink = MutableStateFlow<String?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        pendingDeepLink.value = intent?.dataString
         enableEdgeToEdge()
         setContent {
             val vm: MainViewModel = viewModel(factory = MainViewModel.factory)
+            val deepLink by pendingDeepLink.collectAsState()
+            LaunchedEffect(deepLink) {
+                deepLink?.let {
+                    vm.handleDeepLink(it)
+                    pendingDeepLink.value = null
+                }
+            }
             WolRelayApp(vm)
         }
+    }
+
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        pendingDeepLink.value = intent.dataString
     }
 }
