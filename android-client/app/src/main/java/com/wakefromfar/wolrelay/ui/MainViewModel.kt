@@ -15,6 +15,7 @@ import com.wakefromfar.wolrelay.data.ApiClient
 import com.wakefromfar.wolrelay.data.ApiException
 import com.wakefromfar.wolrelay.data.MyDeviceDto
 import com.wakefromfar.wolrelay.data.SecurePrefs
+import com.wakefromfar.wolrelay.data.ThemeMode
 import kotlinx.coroutines.launch
 
 data class AppUiState(
@@ -24,6 +25,7 @@ data class AppUiState(
     val inviteToken: String? = null,
     val claimPassword: String = "",
     val token: String? = null,
+    val themeMode: ThemeMode = ThemeMode.SYSTEM,
     val devices: List<MyDeviceDto> = emptyList(),
     val isLoading: Boolean = false,
     val error: String? = null,
@@ -43,6 +45,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         AppUiState(
             backendUrl = prefs.getBackendUrl(),
             token = prefs.getToken(),
+            themeMode = prefs.getThemeMode(),
         ),
     )
         private set
@@ -76,6 +79,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun updateClaimPassword(value: String) {
         state = state.copy(claimPassword = value)
+    }
+
+    fun updateThemeMode(mode: ThemeMode) {
+        prefs.setThemeMode(mode)
+        state = state.copy(themeMode = mode)
     }
 
     fun handleDeepLink(uriString: String?) {

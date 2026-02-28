@@ -2,8 +2,12 @@
     <string name="app_name">WakeFromFar</string>
     <string name="title_app">WakeFromFar</string>
     <string name="title_my_devices">Meine Geraete</string>
+    <string name="action_settings">Einstellungen</string>
     <string name="action_refresh">Aktualisieren</string>
     <string name="action_logout">Abmelden</string>
+    <string name="theme_system">Design: System</string>
+    <string name="theme_light">Design: Hell</string>
+    <string name="theme_dark">Design: Dunkel</string>
     <string name="invite_detected">Einladung erkannt</string>
     <string name="invite_token_preview">Token: %1$s...</string>
     <string name="label_backend_url">Backend URL</string>
