@@ -80,6 +80,12 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
+For a dedicated testing environment (separate DB volume), use:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.testing.yml up -d --build
+```
+
 Check:
 
 ```bash
@@ -155,6 +161,18 @@ server {
 ```bash
 docker compose up -d --build
 sudo nginx -t && sudo systemctl reload nginx
+```
+
+For production with dedicated DB volume, use:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+```
+
+For global rate limits across multiple backend instances, add shared Redis:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.redis.yml up -d --build
 ```
 
 Validation:
@@ -266,7 +284,26 @@ If WoL fails:
 5. Trigger wake for both devices
 6. Check `/admin/wake-logs` and verify `sent_to` network targets
 
-## 12. Common Failure Patterns
+## 12. Backup / Restore
+
+Before upgrades, create a DB backup:
+
+```bash
+python3 backend/scripts/backup_db.py
+```
+
+Restore from backup:
+
+```bash
+python3 backend/scripts/restore_db.py backups/<backup-file>.db --force
+```
+
+## 13. Horizontal Scaling Note
+
+- Default `RATE_LIMIT_BACKEND=memory` is process-local and suitable for a single backend instance.
+- For multiple backend instances, run with shared Redis (`RATE_LIMIT_BACKEND=redis`, same `RATE_LIMIT_REDIS_URL` on all instances).
+
+## 14. Common Failure Patterns
 
 - Docker daemon not running: start Docker engine/Desktop first.
 - Wrong proxy CIDR: backend ignores forwarded headers and sees proxy source IP only.

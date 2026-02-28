@@ -4,7 +4,7 @@ import hashlib
 import ipaddress
 import secrets
 import time
-from collections import defaultdict, deque
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
@@ -53,6 +53,7 @@ from .db import (
 )
 from .network import build_network_diagnostics_snapshot
 from .power import PowerCheckResult, run_power_check
+from .rate_limit import configure_rate_limiter, get_rate_limiter
 from .schemas import (
     AdminDeviceCreate,
     AdminDeviceOut,
@@ -79,12 +80,7 @@ from .security import create_token, decode_token, hash_password, verify_password
 from .telemetry import get_counters, increment_counter, structured_log
 from .wol import normalize_mac, resolve_target, send_magic_packet
 
-app = FastAPI(title="WoL Relay", version="0.1.0")
-app.include_router(admin_ui_router)
 auth_scheme = HTTPBearer(auto_error=True)
-LOGIN_ATTEMPTS: dict[str, deque[datetime]] = defaultdict(deque)
-ONBOARDING_ATTEMPTS: dict[str, deque[datetime]] = defaultdict(deque)
-WAKE_ATTEMPTS: dict[str, deque[datetime]] = defaultdict(deque)
 _NETWORK_DIAGNOSTICS: dict[str, object] = {}
 _UNSAFE_APP_SECRETS = {"change-me", "replace-with-a-random-long-secret"}
 _UNSAFE_ADMIN_PASSWORDS = {"change-me-admin-password", "replace-with-strong-password"}
@@ -104,6 +100,7 @@ def _init_bootstrap() -> None:
         )
     if settings.admin_pass and len(settings.admin_pass) < 12:
         raise RuntimeError("ADMIN_PASS is too short. Use at least 12 characters.")
+    configure_rate_limiter(settings)
     init_db()
     if settings.admin_user and settings.admin_pass:
         upsert_admin(settings.admin_user, hash_password(settings.admin_pass))
@@ -135,10 +132,19 @@ def _refresh_network_diagnostics() -> None:
         structured_log("network.discovery.failed", error=str(exc))
 
 
-@app.on_event("startup")
 def on_startup() -> None:
     _init_bootstrap()
     _refresh_network_diagnostics()
+
+
+@asynccontextmanager
+async def app_lifespan(_app: FastAPI):
+    on_startup()
+    yield
+
+
+app = FastAPI(title="WoL Relay", version="0.1.0", lifespan=app_lifespan)
+app.include_router(admin_ui_router)
 
 
 def _parse_ip(value: str | None) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
@@ -205,25 +211,22 @@ async def allowlist_middleware(request: Request, call_next):
     return await call_next(request)
 
 
-def _clean_attempts(store: dict[str, deque[datetime]], key: str, now: datetime) -> None:
-    attempts = store[key]
-    while attempts and (now - attempts[0]).total_seconds() > 60:
-        attempts.popleft()
-
-
 def _enforce_rate_limit(
-    store: dict[str, deque[datetime]],
+    scope: str,
     key: str,
     limit: int,
     detail: str,
 ) -> None:
-    now = datetime.now(UTC)
-    _clean_attempts(store, key, now)
-    if len(store[key]) >= limit:
+    blocked = get_rate_limiter().check_and_record(
+        scope=scope,
+        key=key,
+        limit=limit,
+        window_seconds=60,
+    )
+    if blocked:
         increment_counter("rate_limit.blocked")
-        structured_log("rate_limit.blocked", key=key, detail=detail, limit=limit)
+        structured_log("rate_limit.blocked", scope=scope, key=key, detail=detail, limit=limit)
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=detail)
-    store[key].append(now)
 
 
 @app.get("/health")
@@ -409,18 +412,21 @@ def _run_background_power_check(host_id: str) -> None:
 @app.post("/auth/login", response_model=LoginResponse)
 def login(body: LoginRequest, request: Request) -> LoginResponse:
     settings = get_settings()
-    now = datetime.now(UTC)
     ip = _get_request_ip(request) or "unknown"
 
-    _clean_attempts(LOGIN_ATTEMPTS, ip, now)
-    if len(LOGIN_ATTEMPTS[ip]) >= settings.login_rate_limit_per_minute:
+    if get_rate_limiter().is_limited(
+        scope="login",
+        key=ip,
+        limit=settings.login_rate_limit_per_minute,
+        window_seconds=60,
+    ):
         increment_counter("login.rate_limited")
         structured_log("login.rate_limited", ip=ip)
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Too many login attempts")
 
     user = get_user_by_username(body.username)
     if not user or not verify_password(body.password, user["password_hash"]):
-        LOGIN_ATTEMPTS[ip].append(now)
+        get_rate_limiter().record_attempt(scope="login", key=ip, window_seconds=60)
         increment_counter("login.failed")
         structured_log("login.failed", ip=ip, username=body.username)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
@@ -436,7 +442,7 @@ def onboarding_claim(body: OnboardingClaimRequest, request: Request) -> Onboardi
     settings = get_settings()
     ip = _get_request_ip(request) or "unknown"
     _enforce_rate_limit(
-        ONBOARDING_ATTEMPTS,
+        "onboarding",
         ip,
         settings.onboarding_rate_limit_per_minute,
         "Too many onboarding attempts",
@@ -567,7 +573,7 @@ def me_wake(host_id: str, request: Request, current_user: Annotated[dict, Depend
     ip = _get_request_ip(request) or "unknown"
     rate_key = f"{current_user['username']}@{ip}"
     _enforce_rate_limit(
-        WAKE_ATTEMPTS,
+        "wake",
         rate_key,
         settings.wake_rate_limit_per_minute,
         "Too many wake attempts",

@@ -9,19 +9,42 @@ android {
     namespace = "com.wakefromfar.wolrelay"
     compileSdk = 35
 
+    signingConfigs {
+        create("release") {
+            val storeFilePath = System.getenv("WFF_RELEASE_STORE_FILE")
+            if (!storeFilePath.isNullOrBlank()) {
+                storeFile = file(storeFilePath)
+                storePassword = System.getenv("WFF_RELEASE_STORE_PASSWORD")
+                keyAlias = System.getenv("WFF_RELEASE_KEY_ALIAS")
+                keyPassword = System.getenv("WFF_RELEASE_KEY_PASSWORD")
+            }
+        }
+    }
+
     defaultConfig {
         applicationId = "com.wakefromfar.wolrelay"
         minSdk = 26
         targetSdk = 35
         versionCode = 1
         versionName = "0.1.0"
+        manifestPlaceholders["usesCleartextTraffic"] = "true"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     buildTypes {
+        debug {
+            manifestPlaceholders["usesCleartextTraffic"] = "true"
+        }
+
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
+            manifestPlaceholders["usesCleartextTraffic"] = "false"
+            val hasReleaseKeystore = !System.getenv("WFF_RELEASE_STORE_FILE").isNullOrBlank()
+            if (hasReleaseKeystore) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
@@ -63,4 +86,5 @@ dependencies {
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
+    testImplementation("junit:junit:4.13.2")
 }

@@ -1,7 +1,6 @@
 package com.wakefromfar.wolrelay.ui
 
 import android.app.Application
-import android.net.Uri
 import androidx.annotation.StringRes
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -14,6 +13,7 @@ import com.wakefromfar.wolrelay.R
 import com.wakefromfar.wolrelay.data.ApiClient
 import com.wakefromfar.wolrelay.data.ApiException
 import com.wakefromfar.wolrelay.data.MyDeviceDto
+import com.wakefromfar.wolrelay.data.InviteLinkParser
 import com.wakefromfar.wolrelay.data.SecurePrefs
 import com.wakefromfar.wolrelay.data.ThemeMode
 import kotlinx.coroutines.launch
@@ -87,15 +87,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun handleDeepLink(uriString: String?) {
-        if (uriString.isNullOrBlank()) return
-        val uri = runCatching { Uri.parse(uriString) }.getOrNull() ?: return
-        val token = uri.getQueryParameter("token")?.trim().orEmpty()
-        if (token.isBlank()) return
-        val backendHint = uri.getQueryParameter("backend_url_hint")
-            ?: uri.getQueryParameter("backend_url")
+        val parsed = InviteLinkParser.parse(uriString) ?: return
         state = state.copy(
-            inviteToken = token,
-            backendUrl = backendHint?.takeIf { it.isNotBlank() } ?: state.backendUrl,
+            inviteToken = parsed.token,
+            backendUrl = parsed.backendUrlHint ?: state.backendUrl,
             info = tr(R.string.info_invite_link_detected),
             error = null,
         )

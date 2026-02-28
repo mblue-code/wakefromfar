@@ -7,6 +7,9 @@
   - `LOGIN_RATE_LIMIT_PER_MINUTE`
   - `ONBOARDING_RATE_LIMIT_PER_MINUTE`
   - `WAKE_RATE_LIMIT_PER_MINUTE`
+- If running multiple backend instances, confirm shared Redis rate limit backend:
+  - `RATE_LIMIT_BACKEND=redis`
+  - `RATE_LIMIT_REDIS_URL` points to shared Redis.
 - Verify audit coverage in `/admin/audit-logs` for:
   - user/device CRUD
   - assignment create/delete
@@ -45,9 +48,12 @@
 ## Production Release Gates
 
 - All backend tests pass in CI (`.github/workflows/backend-tests.yml`).
+- Android CI checks pass (`.github/workflows/android-client.yml`).
 - No critical auth/access findings open.
+- Backup created before rollout (`python3 backend/scripts/backup_db.py`).
 - Dry-run executed:
   - new user invite claim
   - assigned device visible
   - wake with `already_on` and `sent` paths
   - audit + logs + metrics visible
+- Use `docs/release-gates.md` as final go/no-go checklist.

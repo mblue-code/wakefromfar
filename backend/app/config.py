@@ -30,6 +30,8 @@ class Settings(BaseSettings):
     login_rate_limit_per_minute: int = Field(default=5, alias="LOGIN_RATE_LIMIT_PER_MINUTE")
     onboarding_rate_limit_per_minute: int = Field(default=5, alias="ONBOARDING_RATE_LIMIT_PER_MINUTE")
     wake_rate_limit_per_minute: int = Field(default=20, alias="WAKE_RATE_LIMIT_PER_MINUTE")
+    rate_limit_backend: str = Field(default="memory", alias="RATE_LIMIT_BACKEND")
+    rate_limit_redis_url: str = Field(default="redis://127.0.0.1:6379/0", alias="RATE_LIMIT_REDIS_URL")
 
     wake_send_max_attempts: int = Field(default=2, alias="WAKE_SEND_MAX_ATTEMPTS")
     wake_send_backoff_ms: int = Field(default=150, alias="WAKE_SEND_BACKOFF_MS")

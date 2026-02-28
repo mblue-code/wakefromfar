@@ -1,0 +1,38 @@
+name: Android Client
+
+on:
+  pull_request:
+    paths:
+      - "android-client/**"
+      - ".github/workflows/android-client.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "android-client/**"
+      - ".github/workflows/android-client.yml"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: android-client
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.10.2"
+
+      - name: Run Android checks
+        run: |
+          gradle --no-daemon testDebugUnitTest lintDebug assembleRelease

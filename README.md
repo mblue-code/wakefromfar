@@ -20,6 +20,24 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
+Testing-Deployment (separate DB volume):
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.testing.yml up -d --build
+```
+
+Production-Deployment (separate DB volume):
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+```
+
+Production with global/distributed rate limits (shared Redis):
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.redis.yml up -d --build
+```
+
 Healthcheck:
 
 ```bash
@@ -40,6 +58,7 @@ curl http://localhost:8080/health
 - Optional `interface` (z.B. `eth0`) setzen, um ein NIC explizit zu wählen.
 - Für Containerbetrieb bevorzugt `source_ip` setzen (IP der passenden Host-NIC), da das stabil ohne zusätzliche Container-Caps funktioniert.
 - Hinter Reverse Proxy `TRUST_PROXY_HEADERS=true` und `TRUSTED_PROXY_CIDRS` auf die Proxy-IP/Netze setzen, damit Allowlist + Rate Limits die echte Client-IP nutzen.
+- Für mehrere Backend-Instanzen `RATE_LIMIT_BACKEND=redis` setzen und eine gemeinsame Redis-Instanz über `RATE_LIMIT_REDIS_URL` verwenden.
 
 ## 2. Admin Bootstrap und Datenpflege
 
@@ -70,6 +89,7 @@ Runbook/Release-Checklist:
 
 - `docs/sprint3-runbook-checklist.md`
 - `docs/deployment-guide.md` (Docker/non-Docker, with/without reverse proxy, multi-NIC WoL)
+- `docs/release-gates.md` (strict pre-testing and pre-production gates)
 ### Host per Admin API anlegen
 
 ```bash
@@ -136,10 +156,29 @@ Sprint-2 Features:
 
 Hinweis:
 
-- Für HTTP im Tailnet ist `usesCleartextTraffic=true` gesetzt.
+- Debug/Testing nutzt `usesCleartextTraffic=true`; Release-Builds setzen `usesCleartextTraffic=false`.
 - Als Backend URL z.B. `http://wol-server:8080` (MagicDNS) oder `http://100.x.y.z:8080`.
+- Release signing in CI/local build über Umgebungsvariablen:
+  - `WFF_RELEASE_STORE_FILE`
+  - `WFF_RELEASE_STORE_PASSWORD`
+  - `WFF_RELEASE_KEY_ALIAS`
+  - `WFF_RELEASE_KEY_PASSWORD`
 
-## 5. Lokale Backend-Entwicklung ohne Docker
+## 5. Backup und Restore (SQLite)
+
+Backup erstellen:
+
+```bash
+python3 backend/scripts/backup_db.py
+```
+
+Restore aus Backup:
+
+```bash
+python3 backend/scripts/restore_db.py backups/<backup-file>.db --force
+```
+
+## 6. Lokale Backend-Entwicklung ohne Docker
 
 ```bash
 cd backend

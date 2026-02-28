@@ -14,22 +14,21 @@ def client(tmp_path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
     monkeypatch.setenv("DB_FILENAME", "test.db")
     monkeypatch.setenv("ENFORCE_IP_ALLOWLIST", "false")
+    monkeypatch.setenv("RATE_LIMIT_BACKEND", "memory")
 
     from app.config import get_settings
-    from app.admin_ui import _LOGIN_ATTEMPTS
-    from app.main import LOGIN_ATTEMPTS, ONBOARDING_ATTEMPTS, WAKE_ATTEMPTS, app
+    from app.main import app
+    from app.rate_limit import reset_rate_limiter_for_tests
     from app.telemetry import reset_counters
 
     get_settings.cache_clear()
-    LOGIN_ATTEMPTS.clear()
-    _LOGIN_ATTEMPTS.clear()
-    ONBOARDING_ATTEMPTS.clear()
-    WAKE_ATTEMPTS.clear()
+    reset_rate_limiter_for_tests()
     reset_counters()
 
     with TestClient(app) as test_client:
         yield test_client
 
+    reset_rate_limiter_for_tests()
     get_settings.cache_clear()
 
 

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import html
+import ipaddress
 import secrets
-from collections import defaultdict, deque
 from datetime import UTC, datetime, timedelta
 from urllib.parse import quote_plus, urlencode, urlparse
 
@@ -42,12 +42,12 @@ from .db import (
     update_user_role,
 )
 from .power import run_power_check
+from .rate_limit import get_rate_limiter
 from .security import create_token, decode_token, hash_password, verify_password
 from .telemetry import get_counters
 from .wol import normalize_mac
 
 router = APIRouter(prefix="/admin/ui", tags=["admin-ui"])
-_LOGIN_ATTEMPTS: dict[str, deque[datetime]] = defaultdict(deque)
 
 _SUPPORTED_LANGS = {"en", "de"}
 
@@ -456,29 +456,66 @@ def _safe_next_path(next_path: str | None) -> str:
     return candidate
 
 
-def _clean_login_attempts(ip_key: str, now: datetime) -> None:
-    attempts = _LOGIN_ATTEMPTS[ip_key]
-    while attempts and (now - attempts[0]).total_seconds() > 60:
-        attempts.popleft()
+def _parse_ip(value: str | None) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    if not value:
+        return None
+    try:
+        return ipaddress.ip_address(value.strip())
+    except ValueError:
+        return None
+
+
+def _is_in_networks(ip_text: str, cidrs: list[str]) -> bool:
+    ip_obj = _parse_ip(ip_text)
+    if not ip_obj:
+        return False
+    for cidr in cidrs:
+        try:
+            if ip_obj in ipaddress.ip_network(cidr, strict=False):
+                return True
+        except ValueError:
+            continue
+    return False
+
+
+def _extract_forwarded_ip(request: Request) -> str | None:
+    forwarded_for = request.headers.get("x-forwarded-for")
+    if forwarded_for:
+        first = forwarded_for.split(",")[0].strip()
+        if _parse_ip(first):
+            return first
+    real_ip = request.headers.get("x-real-ip")
+    if real_ip and _parse_ip(real_ip):
+        return real_ip.strip()
+    return None
 
 
 def _login_ip_key(request: Request) -> str:
-    return request.client.host if request.client else "unknown"
+    settings = get_settings()
+    peer_ip = request.client.host if request.client else None
+    if settings.trust_proxy_headers and peer_ip and _is_in_networks(peer_ip, settings.trusted_proxy_cidrs_list):
+        forwarded = _extract_forwarded_ip(request)
+        if forwarded:
+            return forwarded
+    if peer_ip and _parse_ip(peer_ip):
+        return peer_ip
+    return "unknown"
 
 
 def _is_login_rate_limited(request: Request) -> bool:
     ip_key = _login_ip_key(request)
     settings = get_settings()
-    now = datetime.now(UTC)
-    _clean_login_attempts(ip_key, now)
-    return len(_LOGIN_ATTEMPTS[ip_key]) >= settings.login_rate_limit_per_minute
+    return get_rate_limiter().is_limited(
+        scope="admin_ui_login",
+        key=ip_key,
+        limit=settings.login_rate_limit_per_minute,
+        window_seconds=60,
+    )
 
 
 def _record_failed_login_attempt(request: Request) -> None:
     ip_key = _login_ip_key(request)
-    now = datetime.now(UTC)
-    _clean_login_attempts(ip_key, now)
-    _LOGIN_ATTEMPTS[ip_key].append(now)
+    get_rate_limiter().record_attempt(scope="admin_ui_login", key=ip_key, window_seconds=60)
 
 
 def _admin_from_cookie(request: Request):
