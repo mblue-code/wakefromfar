@@ -3,27 +3,40 @@ from __future__ import annotations
 import hashlib
 import html
 import ipaddress
+import json
 import secrets
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from urllib.parse import quote_plus, urlencode, urlparse
 
-from fastapi import APIRouter, Form, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import APIRouter, BackgroundTasks, Form, Request
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 
 from .config import get_settings
+from .discovery import collect_discovery_candidates, discover_sender_bindings, normalize_source_bindings, summarize_candidates
 from .diagnostics import device_diagnostic_hints
 from .network import build_network_diagnostics_snapshot
 from .db import (
     assign_device_to_user,
+    complete_discovery_run,
     count_admin_users,
     create_host,
+    create_discovery_candidate,
+    create_discovery_run,
     create_invite_token,
     create_user,
     delete_host,
     delete_user,
+    fail_discovery_run,
+    get_discovery_candidate,
+    get_discovery_run,
+    get_host_by_mac,
     get_host_by_id,
     get_user_by_id,
     get_user_by_username,
+    list_discovery_candidates,
+    list_discovery_events,
+    list_discovery_runs,
     list_admin_audit_logs,
     list_assignments,
     list_hosts,
@@ -33,7 +46,10 @@ from .db import (
     list_users,
     list_wake_logs,
     log_admin_action,
+    log_discovery_event,
     log_power_check,
+    mark_discovery_candidate_imported,
+    mark_discovery_run_running,
     remove_assignment,
     revoke_invite,
     update_host,
@@ -45,9 +61,11 @@ from .power import run_power_check
 from .rate_limit import get_rate_limiter
 from .security import create_token, decode_token, hash_password, verify_password
 from .telemetry import get_counters
-from .wol import normalize_mac
+from .wol import normalize_mac, resolve_target, send_magic_packet
 
 router = APIRouter(prefix="/admin/ui", tags=["admin-ui"])
+_STATIC_DIR = Path(__file__).with_name("static")
+_FAVICON_PATH = _STATIC_DIR / "favicon.png"
 
 _SUPPORTED_LANGS = {"en", "de"}
 
@@ -59,6 +77,7 @@ _I18N = {
         "nav_assignments": "Assignments",
         "nav_invites": "Invites",
         "nav_diagnostics": "Diagnostics",
+        "nav_discovery": "Discovery",
         "nav_wake_logs": "Wake Logs",
         "nav_power_logs": "Power Logs",
         "nav_audit_logs": "Audit Logs",
@@ -83,6 +102,7 @@ _I18N = {
         "title_wake_logs": "Wake Logs",
         "title_power_check_logs": "Power Check Logs",
         "title_diagnostics": "Diagnostics",
+        "title_discovery": "Discovery",
         "title_audit_logs": "Audit Logs",
         "title_metrics": "Metrics",
         "title_pilot_metrics": "Pilot Metrics",
@@ -104,6 +124,9 @@ _I18N = {
         "heading_wake_logs": "Wake Logs",
         "heading_power_check_logs": "Power Check Logs",
         "heading_network_interfaces": "Network Interfaces",
+        "heading_discovery_scan": "Run Discovery Scan",
+        "heading_discovery_runs": "Discovery Runs",
+        "heading_discovery_candidates": "Discovery Candidates",
         "heading_device_diagnostics_hints": "Device Diagnostics Hints",
         "heading_admin_audit_logs": "Admin Audit Logs",
         "heading_runtime_counters": "Runtime Counters",
@@ -152,12 +175,19 @@ _I18N = {
         "col_target_id": "Target ID",
         "col_counter": "Counter",
         "col_value": "Value",
+        "col_run_id": "Run ID",
+        "col_status": "Status",
+        "col_summary": "Summary",
+        "col_wol_confidence": "WoL Confidence",
+        "col_source_network": "Source Network",
+        "col_imported_host": "Imported Host",
+        "col_suggested_host": "Suggested Host",
         "col_first_successful_wake": "First Successful Wake",
         "col_seconds": "Seconds",
         "col_within_2m": "Within 2m",
         "placeholder_new_password_optional": "new password (optional)",
         "placeholder_username": "username",
-        "placeholder_password_min12": "password (>=12)",
+        "placeholder_password_min12": "password (>=6)",
         "placeholder_display_name": "display name",
         "placeholder_check_target": "check target",
         "placeholder_check_port": "check port",
@@ -170,6 +200,8 @@ _I18N = {
         "placeholder_backend_url_hint_optional": "backend url hint (optional)",
         "placeholder_hours": "hours",
         "placeholder_host_id_filter": "host id filter",
+        "placeholder_network_cidrs": "network cidrs (comma separated, optional)",
+        "placeholder_power_ports": "power probe ports, e.g. 22,80,443,445",
         "placeholder_actor_filter": "actor filter",
         "placeholder_device_id_filter": "device id filter",
         "option_all_results": "all results",
@@ -183,6 +215,11 @@ _I18N = {
         "action_create_invite": "Create Invite",
         "action_revoke": "Revoke",
         "action_filter": "Filter",
+        "action_run_discovery": "Run Discovery",
+        "action_validate_wake": "Validate Wake",
+        "action_import_candidate": "Import",
+        "action_merge_suggested": "Merge Suggested",
+        "action_bulk_import": "Bulk Import",
         "confirm_delete_user": "Delete user '{username}'?",
         "confirm_delete_device": "Delete device '{device}'?",
         "confirm_remove_assignment": "Remove this assignment?",
@@ -191,7 +228,7 @@ _I18N = {
         "label_link": "Link",
         "alt_invite_qr_code": "Invite QR Code",
         "error_invalid_role": "Invalid role",
-        "error_password_min_length": "Password must be at least 12 characters",
+        "error_password_min_length": "Password must be at least 6 characters",
         "error_username_exists": "Username already exists",
         "error_user_not_found": "User not found",
         "error_cannot_demote_last_admin": "Cannot demote last admin",
@@ -214,6 +251,10 @@ _I18N = {
         "msg_assignment_removed": "Assignment removed",
         "msg_invite_created_for": "Invite created for {username}",
         "msg_invite_revoked": "Invite revoked",
+        "msg_discovery_run_started": "Discovery run started: {run_id}",
+        "msg_discovery_candidate_imported": "Candidate imported to host {host_id}",
+        "msg_discovery_validate_result": "Validation result: {result} ({detail})",
+        "msg_discovery_bulk_imported": "Bulk import complete: imported={imported}, merged={merged}, created={created}, skipped={skipped}, failed={failed}",
         "text_total_claimed_users": "Total claimed users",
         "text_detected_networks": "Detected IPv4 networks",
         "text_multiple_networks_available": "Multiple active networks available",
@@ -222,6 +263,12 @@ _I18N = {
         "text_target_90": "target: 90%",
         "value_yes": "yes",
         "value_no": "no",
+        "error_discovery_disabled": "Discovery feature is disabled",
+        "error_no_discovery_bindings": "No valid discovery source bindings available",
+        "text_active_sender_bindings": "Active sender bindings",
+        "label_import_mode": "Import mode",
+        "option_auto_merge_by_mac": "auto merge by MAC",
+        "option_create_new": "create new only",
     },
     "de": {
         "nav_dashboard": "Dashboard",
@@ -230,6 +277,7 @@ _I18N = {
         "nav_assignments": "Zuweisungen",
         "nav_invites": "Einladungen",
         "nav_diagnostics": "Diagnose",
+        "nav_discovery": "Discovery",
         "nav_wake_logs": "Wake-Logs",
         "nav_power_logs": "Power-Logs",
         "nav_audit_logs": "Audit-Logs",
@@ -254,6 +302,7 @@ _I18N = {
         "title_wake_logs": "Wake-Logs",
         "title_power_check_logs": "Power-Check-Logs",
         "title_diagnostics": "Diagnose",
+        "title_discovery": "Discovery",
         "title_audit_logs": "Audit-Logs",
         "title_metrics": "Metriken",
         "title_pilot_metrics": "Pilot-Metriken",
@@ -275,6 +324,9 @@ _I18N = {
         "heading_wake_logs": "Wake-Logs",
         "heading_power_check_logs": "Power-Check-Logs",
         "heading_network_interfaces": "Netzwerk-Interfaces",
+        "heading_discovery_scan": "Discovery-Scan starten",
+        "heading_discovery_runs": "Discovery-Laufe",
+        "heading_discovery_candidates": "Discovery-Kandidaten",
         "heading_device_diagnostics_hints": "Diagnosehinweise fur Gerate",
         "heading_admin_audit_logs": "Admin-Audit-Logs",
         "heading_runtime_counters": "Runtime-Zahler",
@@ -323,12 +375,19 @@ _I18N = {
         "col_target_id": "Ziel-ID",
         "col_counter": "Zahler",
         "col_value": "Wert",
+        "col_run_id": "Run-ID",
+        "col_status": "Status",
+        "col_summary": "Zusammenfassung",
+        "col_wol_confidence": "WoL-Vertrauen",
+        "col_source_network": "Quellnetz",
+        "col_imported_host": "Importierter Host",
+        "col_suggested_host": "Vorgeschlagener Host",
         "col_first_successful_wake": "Erster erfolgreicher Wake",
         "col_seconds": "Sekunden",
         "col_within_2m": "Innerhalb 2m",
         "placeholder_new_password_optional": "neues Passwort (optional)",
         "placeholder_username": "benutzername",
-        "placeholder_password_min12": "passwort (>=12)",
+        "placeholder_password_min12": "passwort (>=6)",
         "placeholder_display_name": "anzeige name",
         "placeholder_check_target": "check ziel",
         "placeholder_check_port": "check port",
@@ -341,6 +400,8 @@ _I18N = {
         "placeholder_backend_url_hint_optional": "backend url hinweis (optional)",
         "placeholder_hours": "stunden",
         "placeholder_host_id_filter": "host-id filter",
+        "placeholder_network_cidrs": "netz-cidrs (kommagetrennt, optional)",
+        "placeholder_power_ports": "power probe ports, z. B. 22,80,443,445",
         "placeholder_actor_filter": "ausloser filter",
         "placeholder_device_id_filter": "gerate-id filter",
         "option_all_results": "alle ergebnisse",
@@ -354,6 +415,11 @@ _I18N = {
         "action_create_invite": "Einladung erstellen",
         "action_revoke": "Widerrufen",
         "action_filter": "Filtern",
+        "action_run_discovery": "Discovery starten",
+        "action_validate_wake": "Wake validieren",
+        "action_import_candidate": "Importieren",
+        "action_merge_suggested": "Vorschlag mergen",
+        "action_bulk_import": "Bulk-Import",
         "confirm_delete_user": "Benutzer '{username}' loschen?",
         "confirm_delete_device": "Gerat '{device}' loschen?",
         "confirm_remove_assignment": "Diese Zuweisung entfernen?",
@@ -362,7 +428,7 @@ _I18N = {
         "label_link": "Link",
         "alt_invite_qr_code": "Einladungs-QR-Code",
         "error_invalid_role": "Ungultige Rolle",
-        "error_password_min_length": "Passwort muss mindestens 12 Zeichen haben",
+        "error_password_min_length": "Passwort muss mindestens 6 Zeichen haben",
         "error_username_exists": "Benutzername existiert bereits",
         "error_user_not_found": "Benutzer nicht gefunden",
         "error_cannot_demote_last_admin": "Letzter Admin kann nicht herabgestuft werden",
@@ -385,6 +451,10 @@ _I18N = {
         "msg_assignment_removed": "Zuweisung entfernt",
         "msg_invite_created_for": "Einladung fur {username} erstellt",
         "msg_invite_revoked": "Einladung widerrufen",
+        "msg_discovery_run_started": "Discovery-Run gestartet: {run_id}",
+        "msg_discovery_candidate_imported": "Kandidat in Host {host_id} importiert",
+        "msg_discovery_validate_result": "Validierung: {result} ({detail})",
+        "msg_discovery_bulk_imported": "Bulk-Import abgeschlossen: importiert={imported}, gemerged={merged}, erstellt={created}, ubersprungen={skipped}, fehlgeschlagen={failed}",
         "text_total_claimed_users": "Insgesamt eingeloste Benutzer",
         "text_detected_networks": "Erkannte IPv4-Netze",
         "text_multiple_networks_available": "Mehrere aktive Netzwerke verfugbar",
@@ -393,6 +463,12 @@ _I18N = {
         "text_target_90": "Ziel: 90%",
         "value_yes": "ja",
         "value_no": "nein",
+        "error_discovery_disabled": "Discovery-Funktion ist deaktiviert",
+        "error_no_discovery_bindings": "Keine gultigen Discovery-Quellbindungen verfugbar",
+        "text_active_sender_bindings": "Aktive Sender-Bindings",
+        "label_import_mode": "Import-Modus",
+        "option_auto_merge_by_mac": "automatisch per MAC mergen",
+        "option_create_new": "nur neu erstellen",
     },
 }
 
@@ -597,6 +673,7 @@ def _layout(request: Request, title: str, body: str, admin_username: str, messag
         {_nav('/admin/ui/audit-logs', t('nav_audit_logs'))}
         <div class="nav-sep"></div>
         {_nav('/admin/ui/diagnostics', t('nav_diagnostics'))}
+        {_nav('/admin/ui/discovery', t('nav_discovery'))}
         {_nav('/admin/ui/metrics', t('nav_metrics'))}
         {_nav('/admin/ui/pilot-metrics', t('nav_pilot_metrics'))}
       </nav>
@@ -672,6 +749,7 @@ document.querySelectorAll('.flash').forEach(function(el){
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>{_esc(title)} — WakeFromFar Admin</title>
+  <link rel="icon" type="image/png" href="/admin/ui/favicon.png">
   <style>{css}</style>
 </head>
 <body>
@@ -719,6 +797,184 @@ def _msg(request: Request) -> tuple[str | None, str | None]:
     return request.query_params.get("message"), request.query_params.get("error")
 
 
+def _parse_csv(text: str) -> list[str]:
+    return [part.strip() for part in text.split(",") if part.strip()]
+
+
+def _parse_ports(text: str, fallback: list[int]) -> list[int]:
+    ports: list[int] = []
+    for part in _parse_csv(text):
+        try:
+            value = int(part)
+        except ValueError:
+            continue
+        if 1 <= value <= 65535:
+            ports.append(value)
+    if not ports:
+        return fallback
+    return sorted(set(ports))
+
+
+def _parse_json_dict(text: str | None) -> dict:
+    if not text:
+        return {}
+    try:
+        parsed = json.loads(text)
+    except (TypeError, ValueError):
+        return {}
+    if isinstance(parsed, dict):
+        return parsed
+    return {}
+
+
+def _execute_discovery_run_ui(run_id: str) -> None:
+    run = get_discovery_run(run_id)
+    if not run:
+        return
+    mark_discovery_run_running(run_id)
+    options = _parse_json_dict(run["options_json"])
+    try:
+        bindings = normalize_source_bindings(
+            options.get("source_bindings") if isinstance(options.get("source_bindings"), list) else [],
+            fallback_bindings=discover_sender_bindings(),
+        )
+        selected_networks = {
+            str(item).strip()
+            for item in (options.get("network_cidrs") or [])
+            if str(item).strip()
+        }
+        if selected_networks:
+            bindings = [row for row in bindings if row.get("network_cidr") in selected_networks]
+        host_probe = options.get("host_probe") or {}
+        power_probe = options.get("power_probe") or {}
+        candidates, warnings = collect_discovery_candidates(
+            source_bindings=bindings,
+            host_probe_enabled=bool(host_probe.get("enabled", False)),
+            host_probe_timeout_ms=int(host_probe.get("timeout_ms", 200)),
+            max_hosts_per_network=int(host_probe.get("max_hosts_per_network", 256)),
+            power_probe_ports=[int(p) for p in power_probe.get("ports", []) if isinstance(p, int) and 1 <= p <= 65535]
+            or [22, 80, 443, 445],
+            power_probe_timeout_ms=int(power_probe.get("timeout_ms", 200)),
+        )
+        for candidate in candidates:
+            candidate_id = create_discovery_candidate(
+                run_id=run_id,
+                hostname=candidate.get("hostname"),
+                mac=candidate.get("mac"),
+                ip=candidate.get("ip"),
+                source_interface=candidate.get("source_interface"),
+                source_ip=candidate.get("source_ip"),
+                source_network_cidr=candidate.get("source_network_cidr"),
+                broadcast_ip=candidate.get("broadcast_ip"),
+                wol_confidence=candidate.get("wol_confidence") or "unknown",
+                power_check_method=candidate.get("power_check_method"),
+                power_check_target=candidate.get("power_check_target"),
+                power_check_port=candidate.get("power_check_port"),
+                power_data_source=candidate.get("power_data_source") or "inferred",
+                notes_json=json.dumps(candidate.get("notes_json") or {}),
+            )
+            log_discovery_event(
+                run_id=run_id,
+                candidate_id=candidate_id,
+                event_type="probe",
+                detail=f"discovered ip={candidate.get('ip')} mac={candidate.get('mac')}",
+            )
+        complete_discovery_run(run_id, json.dumps(summarize_candidates(candidates, warnings)))
+        log_discovery_event(run_id=run_id, event_type="probe", detail=f"completed candidates={len(candidates)}")
+    except Exception as exc:
+        fail_discovery_run(run_id, json.dumps({"error": str(exc)}))
+        log_discovery_event(run_id=run_id, event_type="error", detail=str(exc))
+
+
+def _candidate_default_name_ui(candidate: dict, prefix: str | None = None) -> str:
+    base = str(candidate.get("hostname") or "").strip()
+    if base:
+        return base
+    ip_text = str(candidate.get("ip") or "").strip().replace(".", "-")
+    if ip_text:
+        return f"{prefix or 'discovered'}-{ip_text}"
+    return f"{prefix or 'discovered'}-{str(candidate.get('id') or '')[:8]}"
+
+
+def _import_discovery_candidate_ui(
+    candidate: dict,
+    *,
+    mode: str,
+    name: str | None,
+    display_name: str | None,
+    target_host_id: str | None,
+    apply_power_settings: bool,
+    group_name: str | None,
+    name_prefix: str | None = None,
+) -> tuple[str, str]:
+    now_iso = datetime.now(UTC).isoformat()
+    existing_by_mac = get_host_by_mac(candidate["mac"]) if candidate.get("mac") else None
+    effective_mode = mode
+    resolved_target = target_host_id
+    if mode == "auto_merge_by_mac":
+        if existing_by_mac:
+            effective_mode = "update_existing"
+            resolved_target = str(existing_by_mac["id"])
+        else:
+            effective_mode = "create_new"
+
+    if effective_mode == "create_new":
+        if not candidate.get("mac"):
+            raise ValueError("candidate has no mac")
+        resolved_name = (name or "").strip() or _candidate_default_name_ui(candidate, prefix=name_prefix)
+        host_id = create_host(
+            host_id=None,
+            name=resolved_name,
+            display_name=display_name,
+            mac=candidate["mac"],
+            group_name=group_name,
+            broadcast=candidate.get("broadcast_ip"),
+            subnet_cidr=candidate.get("source_network_cidr"),
+            udp_port=9,
+            interface=candidate.get("source_interface"),
+            source_ip=candidate.get("source_ip"),
+            source_network_cidr=candidate.get("source_network_cidr"),
+            check_method="tcp",
+            check_target=candidate.get("power_check_target") if apply_power_settings else None,
+            check_port=candidate.get("power_check_port") if apply_power_settings else None,
+            provisioning_source="discovery",
+            discovery_confidence=candidate.get("wol_confidence"),
+            last_discovered_at=now_iso,
+        )
+        return host_id, effective_mode
+
+    if effective_mode != "update_existing":
+        raise ValueError("invalid import mode")
+    if not resolved_target:
+        raise ValueError("target_host_id required")
+    existing = get_host_by_id(resolved_target)
+    if not existing:
+        raise ValueError("target host not found")
+    updates: dict[str, object | None] = {
+        "broadcast": candidate.get("broadcast_ip") or existing["broadcast"],
+        "source_ip": candidate.get("source_ip") or existing["source_ip"],
+        "interface": candidate.get("source_interface") or existing["interface"],
+        "source_network_cidr": candidate.get("source_network_cidr") or existing["source_network_cidr"],
+        "provisioning_source": "discovery",
+        "discovery_confidence": candidate.get("wol_confidence"),
+        "last_discovered_at": now_iso,
+    }
+    if candidate.get("mac"):
+        updates["mac"] = candidate["mac"]
+    if name:
+        updates["name"] = name
+    if display_name is not None:
+        updates["display_name"] = display_name
+    if group_name is not None:
+        updates["group_name"] = group_name
+    if apply_power_settings:
+        updates["check_method"] = "tcp"
+        updates["check_target"] = candidate.get("power_check_target")
+        updates["check_port"] = candidate.get("power_check_port")
+    update_host(resolved_target, updates)
+    return resolved_target, effective_mode
+
+
 @router.get("/login", response_class=HTMLResponse)
 def login_page(request: Request, next: str = "/admin/ui", error: str | None = None):
     user = _admin_from_cookie(request)
@@ -734,6 +990,7 @@ def login_page(request: Request, next: str = "/admin/ui", error: str | None = No
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>{t("title_admin_login")}</title>
+  <link rel="icon" type="image/png" href="/admin/ui/favicon.png">
   <style>
 *{{box-sizing:border-box}}
 html,body{{margin:0;padding:0}}
@@ -838,6 +1095,23 @@ def dashboard(request: Request):
     wake_logs = list_wake_logs(limit=10)
     power_logs = list_power_check_logs(limit=10)
     message, error = _msg(request)
+    bulk_form = ""
+    if selected_run_id:
+        bulk_form = f"""
+    <form method="post" action="/admin/ui/discovery/runs/{_esc(selected_run_id)}/import-bulk" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:.8rem;">
+      <label>{t("label_import_mode")}
+        <select name="mode">
+          <option value="auto_merge_by_mac">{t("option_auto_merge_by_mac")}</option>
+          <option value="create_new">{t("option_create_new")}</option>
+        </select>
+      </label>
+      <input name="name_prefix" placeholder="discovered" />
+      <label style="display:flex;align-items:center;gap:6px;"><input type="checkbox" name="apply_power_settings" value="1" checked />power settings</label>
+      <label style="display:flex;align-items:center;gap:6px;"><input type="checkbox" name="skip_without_mac" value="1" checked />skip without mac</label>
+      <button type="submit">{t("action_bulk_import")}</button>
+    </form>
+        """
+
     body = f"""
     <div class="stat-cards">
       <article class="stat-card"><strong class="stat-number">{len(users)}</strong><span class="stat-label">{t("card_users")}</span></article>
@@ -915,7 +1189,7 @@ def users_create(request: Request, username: str = Form(...), password: str = Fo
     t = lambda key, **kwargs: _tr(request, key, **kwargs)
     if role not in {"admin", "user"}:
         return _redirect("/admin/ui/users", error=t("error_invalid_role"), request=request)
-    if len(password) < 12:
+    if len(password) < 6:
         return _redirect("/admin/ui/users", error=t("error_password_min_length"), request=request)
     if get_user_by_username(username):
         return _redirect("/admin/ui/users", error=t("error_username_exists"), request=request)
@@ -945,7 +1219,7 @@ def users_update(request: Request, user_id: int, role: str = Form(...), password
         return _redirect("/admin/ui/users", error=t("error_cannot_demote_last_admin"), request=request)
     update_user_role(user_id, role)
     if password:
-        if len(password) < 12:
+        if len(password) < 6:
             return _redirect("/admin/ui/users", error=t("error_password_min_length"), request=request)
         update_user_password_by_id(user_id, hash_password(password))
     log_admin_action(
@@ -1002,6 +1276,7 @@ def devices_page(request: Request):
               <input name="mac" value="{_esc(row['mac'])}" />
               <input name="interface" value="{_esc(row['interface'])}" placeholder="{t("placeholder_interface")}" />
               <input name="source_ip" value="{_esc(row['source_ip'])}" placeholder="source ip (optional)" />
+              <input name="source_network_cidr" value="{_esc(row['source_network_cidr'])}" placeholder="{t("placeholder_subnet_cidr")}" />
               <input name="check_target" value="{_esc(row['check_target'])}" placeholder="{t("placeholder_check_target")}" />
               <input name="check_port" value="{_esc(row['check_port'])}" placeholder="{t("placeholder_check_port")}" />
               <select name="check_method">
@@ -1031,6 +1306,7 @@ def devices_page(request: Request):
       <input name="udp_port" value="9" placeholder="{t("placeholder_udp_port")}" />
       <input name="interface" placeholder="{t("placeholder_interface")}" />
       <input name="source_ip" placeholder="source ip (optional)" />
+      <input name="source_network_cidr" placeholder="{t("placeholder_subnet_cidr")}" />
       <select name="check_method"><option value="tcp">tcp</option><option value="icmp">icmp</option></select>
       <input name="check_target" placeholder="{t("placeholder_check_target")}" />
       <input name="check_port" placeholder="{t("placeholder_check_port")}" />
@@ -1057,6 +1333,7 @@ def devices_create(
     udp_port: int = Form(9),
     interface: str = Form(""),
     source_ip: str = Form(""),
+    source_network_cidr: str = Form(""),
     check_method: str = Form("tcp"),
     check_target: str = Form(""),
     check_port: str = Form(""),
@@ -1083,6 +1360,7 @@ def devices_create(
         udp_port=udp_port,
         interface=interface or None,
         source_ip=source_ip or None,
+        source_network_cidr=source_network_cidr or None,
         check_method=check_method,
         check_target=check_target or None,
         check_port=port_value,
@@ -1106,6 +1384,7 @@ def devices_update(
     mac: str = Form(...),
     interface: str = Form(""),
     source_ip: str = Form(""),
+    source_network_cidr: str = Form(""),
     check_method: str = Form("tcp"),
     check_target: str = Form(""),
     check_port: str = Form(""),
@@ -1135,6 +1414,7 @@ def devices_update(
             "mac": normalized_mac,
             "interface": interface or None,
             "source_ip": source_ip or None,
+            "source_network_cidr": source_network_cidr or None,
             "check_method": check_method,
             "check_target": check_target or None,
             "check_port": port_value,
@@ -1547,6 +1827,396 @@ def diagnostics_page(request: Request):
     """
     message, error = _msg(request)
     return _layout(request, t("title_diagnostics"), body, admin["username"], message=message, error=error)
+
+
+@router.get("/discovery", response_class=HTMLResponse)
+def discovery_page(request: Request, run_id: str = ""):
+    admin = _require_admin_or_redirect(request)
+    if isinstance(admin, RedirectResponse):
+        return admin
+    t = lambda key, **kwargs: _tr(request, key, **kwargs)
+    settings = get_settings()
+    if not settings.discovery_enabled:
+        body = f"<article><p>{t('error_discovery_disabled')}</p></article>"
+        message, error = _msg(request)
+        return _layout(request, t("title_discovery"), body, admin["username"], message=message, error=error)
+
+    bindings = discover_sender_bindings()
+    runs = list_discovery_runs(limit=30)
+    selected_run_id = run_id.strip() or (str(runs[0]["id"]) if runs else "")
+    candidates = list_discovery_candidates(selected_run_id) if selected_run_id else []
+    events = list_discovery_events(selected_run_id, limit=30) if selected_run_id else []
+    mac_map: dict[str, tuple[str, str]] = {}
+    for host in list_hosts():
+        mac = str(host["mac"] or "")
+        if mac and mac not in mac_map:
+            mac_map[mac] = (str(host["id"]), str(host["name"]))
+
+    run_rows = []
+    for row in runs:
+        summary = _parse_json_dict(row["summary_json"])
+        summary_text = (
+            f"candidates={summary.get('candidate_count', 0)}, "
+            f"high={summary.get('wol_high_confidence_count', 0)}, "
+            f"warnings={len(summary.get('warnings', []))}"
+        )
+        run_rows.append(
+            "<tr>"
+            f"<td><a href=\"{_with_lang(f'/admin/ui/discovery?run_id={_esc(row['id'])}', _lang(request))}\">{_esc(row['id'])}</a></td>"
+            f"<td>{_badge(str(row['status']))}</td>"
+            f"<td>{_esc(summary_text)}</td>"
+            f"<td>{_esc(row['created_at'])}</td>"
+            "</tr>"
+        )
+
+    candidate_rows = []
+    for row in candidates:
+        suggested = mac_map.get(str(row["mac"] or ""))
+        suggested_host_id = suggested[0] if suggested else ""
+        suggested_host_name = suggested[1] if suggested else ""
+        suggested_cell = _esc(f"{suggested_host_name} ({suggested_host_id})") if suggested else "-"
+        suggested_action = ""
+        if suggested and not row["imported_host_id"]:
+            suggested_action = (
+                f'<form method="post" action="/admin/ui/discovery/candidates/{_esc(row["id"])}/import" style="display:inline;">'
+                '<input type="hidden" name="mode" value="auto_merge_by_mac" />'
+                '<input type="hidden" name="apply_power_settings" value="1" />'
+                f'<button type="submit" class="secondary">{t("action_merge_suggested")}</button>'
+                "</form>"
+            )
+        candidate_rows.append(
+            f"""
+            <tr>
+              <td>{_esc(row['id'])}</td>
+              <td>{_esc(row['hostname'])}</td>
+              <td>{_esc(row['mac'])}</td>
+              <td>{_esc(row['ip'])}</td>
+              <td>{_badge(str(row['wol_confidence']))}</td>
+              <td>{_esc(row['source_network_cidr'])}</td>
+              <td>{_esc(row['imported_host_id'])}</td>
+              <td>{suggested_cell}</td>
+              <td>
+                {suggested_action}
+                <form method="post" action="/admin/ui/discovery/candidates/{_esc(row['id'])}/validate-wake" style="display:inline;">
+                  <button type="submit" class="secondary">{t("action_validate_wake")}</button>
+                </form>
+                <form method="post" action="/admin/ui/discovery/candidates/{_esc(row['id'])}/import" style="display:inline-flex;gap:6px;align-items:center;">
+                  <input name="mode" type="hidden" value="create_new" />
+                  <input name="apply_power_settings" type="hidden" value="1" />
+                  <input name="name" placeholder="{t("placeholder_name")}" style="max-width:180px" />
+                  <button type="submit">{t("action_import_candidate")}</button>
+                </form>
+              </td>
+            </tr>
+            """
+        )
+
+    event_rows = "".join(
+        f"<tr><td>{row['id']}</td><td>{_esc(row['event_type'])}</td><td>{_esc(row['candidate_id'])}</td><td>{_esc(row['detail'])}</td><td>{_esc(row['created_at'])}</td></tr>"
+        for row in events
+    )
+    binding_text = ", ".join(
+        f"{_esc(row.get('network_cidr'))} via {_esc(row.get('source_ip'))}"
+        for row in bindings
+    ) or "-"
+    bulk_form = ""
+    if selected_run_id:
+        bulk_form = f"""
+    <form method="post" action="/admin/ui/discovery/runs/{_esc(selected_run_id)}/import-bulk" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:.8rem;">
+      <label>{t("label_import_mode")}
+        <select name="mode">
+          <option value="auto_merge_by_mac">{t("option_auto_merge_by_mac")}</option>
+          <option value="create_new">{t("option_create_new")}</option>
+        </select>
+      </label>
+      <input name="name_prefix" placeholder="discovered" />
+      <label style="display:flex;align-items:center;gap:6px;"><input type="checkbox" name="apply_power_settings" value="1" checked />power settings</label>
+      <label style="display:flex;align-items:center;gap:6px;"><input type="checkbox" name="skip_without_mac" value="1" checked />skip without mac</label>
+      <button type="submit">{t("action_bulk_import")}</button>
+    </form>
+        """
+
+    body = f"""
+    <h2>{t("heading_discovery_scan")}</h2>
+    <p>{t("text_active_sender_bindings")}: <strong>{binding_text}</strong></p>
+    <form method="post" action="/admin/ui/discovery/run" style="display:grid;grid-template-columns:repeat(4,minmax(170px,1fr));gap:8px;margin-bottom:1.5rem;">
+      <input name="network_cidrs" placeholder="{t("placeholder_network_cidrs")}" />
+      <input name="power_ports" placeholder="{t("placeholder_power_ports")}" />
+      <input name="power_timeout_ms" value="200" />
+      <label style="display:flex;align-items:center;gap:6px;"><input type="checkbox" name="host_probe_enabled" value="1" /> host probe</label>
+      <input name="host_probe_timeout_ms" value="200" />
+      <input name="max_hosts_per_network" value="{settings.discovery_default_host_cap}" />
+      <button type="submit">{t("action_run_discovery")}</button>
+    </form>
+    <h2>{t("heading_discovery_runs")}</h2>
+    <figure><table>
+      <thead><tr><th>{t("col_run_id")}</th><th>{t("col_status")}</th><th>{t("col_summary")}</th><th>{t("col_created")}</th></tr></thead>
+      <tbody>{''.join(run_rows)}</tbody>
+    </table></figure>
+    <h2>{t("heading_discovery_candidates")}</h2>
+    {bulk_form}
+    <figure><table>
+      <thead><tr><th>{t("col_id")}</th><th>{t("col_name")}</th><th>{t("col_mac")}</th><th>{t("col_ipv4")}</th><th>{t("col_wol_confidence")}</th><th>{t("col_source_network")}</th><th>{t("col_imported_host")}</th><th>{t("col_suggested_host")}</th><th>{t("col_actions")}</th></tr></thead>
+      <tbody>{''.join(candidate_rows)}</tbody>
+    </table></figure>
+    <h2>Events</h2>
+    <figure><table>
+      <thead><tr><th>{t("col_id")}</th><th>{t("col_action")}</th><th>{t("col_device_id")}</th><th>{t("col_detail")}</th><th>{t("col_created")}</th></tr></thead>
+      <tbody>{event_rows}</tbody>
+    </table></figure>
+    """
+    message, error = _msg(request)
+    return _layout(request, t("title_discovery"), body, admin["username"], message=message, error=error)
+
+
+@router.post("/discovery/run")
+def discovery_run(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    network_cidrs: str = Form(""),
+    power_ports: str = Form("22,80,443,445"),
+    power_timeout_ms: int = Form(200),
+    host_probe_enabled: str = Form(""),
+    host_probe_timeout_ms: int = Form(200),
+    max_hosts_per_network: int = Form(256),
+):
+    admin = _require_admin_or_redirect(request)
+    if isinstance(admin, RedirectResponse):
+        return admin
+    t = lambda key, **kwargs: _tr(request, key, **kwargs)
+    settings = get_settings()
+    if not settings.discovery_enabled:
+        return _redirect("/admin/ui/discovery", error=t("error_discovery_disabled"), request=request)
+
+    selected_networks = set(_parse_csv(network_cidrs))
+    source_bindings = normalize_source_bindings(source_bindings=[], fallback_bindings=discover_sender_bindings())
+    if selected_networks:
+        source_bindings = [row for row in source_bindings if str(row.get("network_cidr") or "") in selected_networks]
+    if not source_bindings:
+        return _redirect("/admin/ui/discovery", error=t("error_no_discovery_bindings"), request=request)
+
+    options = {
+        "network_cidrs": sorted(selected_networks),
+        "source_bindings": source_bindings,
+        "host_probe": {
+            "enabled": bool(host_probe_enabled.strip()),
+            "timeout_ms": max(50, min(host_probe_timeout_ms, 5000)),
+            "max_hosts_per_network": max(1, min(max_hosts_per_network, 4096)),
+        },
+        "power_probe": {
+            "ports": _parse_ports(power_ports, settings.discovery_default_tcp_ports_list),
+            "timeout_ms": max(50, min(power_timeout_ms, 5000)),
+        },
+    }
+    run_id = create_discovery_run(requested_by=admin["username"], options_json=json.dumps(options))
+    log_admin_action(
+        actor_username=admin["username"],
+        action="ui_start_discovery_run",
+        target_type="discovery",
+        target_id=run_id,
+        detail=f"networks={len(source_bindings)}",
+    )
+    background_tasks.add_task(_execute_discovery_run_ui, run_id)
+    return _redirect(
+        f"/admin/ui/discovery?run_id={run_id}",
+        message=t("msg_discovery_run_started", run_id=run_id),
+        request=request,
+    )
+
+
+@router.post("/discovery/candidates/{candidate_id}/validate-wake")
+def discovery_validate_candidate(request: Request, candidate_id: str):
+    admin = _require_admin_or_redirect(request)
+    if isinstance(admin, RedirectResponse):
+        return admin
+    t = lambda key, **kwargs: _tr(request, key, **kwargs)
+    candidate = get_discovery_candidate(candidate_id)
+    if not candidate:
+        return _redirect("/admin/ui/discovery", error=t("error_device_not_found"), request=request)
+
+    result = "failed"
+    detail = "missing_mac"
+    if candidate["mac"]:
+        target_ip = resolve_target(broadcast=candidate["broadcast_ip"], subnet_cidr=candidate["source_network_cidr"])
+        try:
+            send_magic_packet(
+                mac=candidate["mac"],
+                target_ip=target_ip,
+                udp_port=9,
+                interface=candidate["source_interface"],
+                source_ip=candidate["source_ip"],
+            )
+            result = "sent"
+            detail = "magic_packet_sent"
+            if candidate["power_check_target"] and candidate["power_check_port"]:
+                check = run_power_check(
+                    method="tcp",
+                    target=candidate["power_check_target"],
+                    port=candidate["power_check_port"],
+                )
+                if check.result == "on":
+                    result = "validated"
+                detail = check.detail
+        except Exception as exc:
+            result = "failed"
+            detail = str(exc)
+
+    log_discovery_event(
+        run_id=candidate["run_id"],
+        candidate_id=candidate_id,
+        event_type="validation",
+        detail=f"{result}:{detail}",
+    )
+    log_admin_action(
+        actor_username=admin["username"],
+        action="ui_validate_discovery_candidate",
+        target_type="discovery",
+        target_id=candidate_id,
+        detail=f"result={result}",
+    )
+    return _redirect(
+        f"/admin/ui/discovery?run_id={candidate['run_id']}",
+        message=t("msg_discovery_validate_result", result=result, detail=detail),
+        request=request,
+    )
+
+
+@router.post("/discovery/candidates/{candidate_id}/import")
+def discovery_import_candidate(
+    request: Request,
+    candidate_id: str,
+    mode: str = Form("create_new"),
+    name: str = Form(""),
+    display_name: str = Form(""),
+    target_host_id: str = Form(""),
+    apply_power_settings: str = Form(""),
+    group_name: str = Form(""),
+):
+    admin = _require_admin_or_redirect(request)
+    if isinstance(admin, RedirectResponse):
+        return admin
+    candidate = get_discovery_candidate(candidate_id)
+    if not candidate:
+        return _redirect("/admin/ui/discovery", error="candidate not found", request=request)
+
+    use_power = bool(apply_power_settings.strip())
+    try:
+        host_id, effective_mode = _import_discovery_candidate_ui(
+            dict(candidate),
+            mode=mode,
+            name=name.strip() or None,
+            display_name=display_name.strip() or None,
+            target_host_id=target_host_id.strip() or None,
+            apply_power_settings=use_power,
+            group_name=group_name.strip() or None,
+        )
+    except Exception as exc:
+        return _redirect(f"/admin/ui/discovery?run_id={candidate['run_id']}", error=str(exc), request=request)
+
+    mark_discovery_candidate_imported(candidate_id, host_id)
+    log_discovery_event(
+        run_id=candidate["run_id"],
+        candidate_id=candidate_id,
+        event_type="import",
+        detail=f"mode={mode} effective_mode={effective_mode} host_id={host_id}",
+    )
+    log_admin_action(
+        actor_username=admin["username"],
+        action="ui_import_discovery_candidate",
+        target_type="discovery",
+        target_id=candidate_id,
+        detail=f"mode={mode} effective_mode={effective_mode} host_id={host_id}",
+    )
+    return _redirect(
+        f"/admin/ui/discovery?run_id={candidate['run_id']}",
+        message=_tr(request, "msg_discovery_candidate_imported", host_id=host_id),
+        request=request,
+    )
+
+
+@router.post("/discovery/runs/{run_id}/import-bulk")
+def discovery_bulk_import_run(
+    request: Request,
+    run_id: str,
+    mode: str = Form("auto_merge_by_mac"),
+    name_prefix: str = Form(""),
+    apply_power_settings: str = Form(""),
+    group_name: str = Form(""),
+    skip_without_mac: str = Form(""),
+):
+    admin = _require_admin_or_redirect(request)
+    if isinstance(admin, RedirectResponse):
+        return admin
+    run = get_discovery_run(run_id)
+    if not run:
+        return _redirect("/admin/ui/discovery", error="run not found", request=request)
+    candidates = list_discovery_candidates(run_id=run_id, only_unimported=True)
+    processed = 0
+    imported = 0
+    merged = 0
+    created = 0
+    skipped = 0
+    failed = 0
+    use_power = bool(apply_power_settings.strip())
+    skip_missing_mac = bool(skip_without_mac.strip())
+    for row in candidates:
+        candidate = dict(row)
+        processed += 1
+        candidate_id = str(candidate["id"])
+        if not candidate.get("mac") and skip_missing_mac:
+            skipped += 1
+            continue
+        try:
+            host_id, effective_mode = _import_discovery_candidate_ui(
+                candidate,
+                mode=mode,
+                name=None,
+                display_name=None,
+                target_host_id=None,
+                apply_power_settings=use_power,
+                group_name=group_name.strip() or None,
+                name_prefix=name_prefix.strip() or None,
+            )
+            mark_discovery_candidate_imported(candidate_id, host_id)
+            log_discovery_event(
+                run_id=run_id,
+                candidate_id=candidate_id,
+                event_type="import",
+                detail=f"ui bulk mode={mode} effective_mode={effective_mode} host_id={host_id}",
+            )
+            imported += 1
+            if effective_mode == "update_existing":
+                merged += 1
+            else:
+                created += 1
+        except Exception as exc:
+            failed += 1
+            log_discovery_event(
+                run_id=run_id,
+                candidate_id=candidate_id,
+                event_type="error",
+                detail=f"ui bulk import failed: {exc}",
+            )
+    log_admin_action(
+        actor_username=admin["username"],
+        action="ui_bulk_import_discovery_run",
+        target_type="discovery",
+        target_id=run_id,
+        detail=f"mode={mode} processed={processed} imported={imported} merged={merged} created={created} skipped={skipped} failed={failed}",
+    )
+    return _redirect(
+        f"/admin/ui/discovery?run_id={run_id}",
+        message=_tr(
+            request,
+            "msg_discovery_bulk_imported",
+            imported=imported,
+            merged=merged,
+            created=created,
+            skipped=skipped,
+            failed=failed,
+        ),
+        request=request,
+    )
 
 
 @router.get("/audit-logs", response_class=HTMLResponse)

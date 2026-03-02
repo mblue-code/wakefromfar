@@ -37,6 +37,12 @@ class Settings(BaseSettings):
     wake_send_backoff_ms: int = Field(default=150, alias="WAKE_SEND_BACKOFF_MS")
     power_check_timeout_seconds: float = Field(default=1.5, alias="POWER_CHECK_TIMEOUT_SECONDS")
     power_state_stale_seconds: int = Field(default=20, alias="POWER_STATE_STALE_SECONDS")
+    discovery_enabled: bool = Field(default=True, alias="DISCOVERY_ENABLED")
+    discovery_rate_limit_per_minute: int = Field(default=6, alias="DISCOVERY_RATE_LIMIT_PER_MINUTE")
+    discovery_max_concurrent_probes: int = Field(default=64, alias="DISCOVERY_MAX_CONCURRENT_PROBES")
+    discovery_default_host_cap: int = Field(default=256, alias="DISCOVERY_DEFAULT_HOST_CAP")
+    discovery_default_tcp_ports: str = Field(default="22,80,443,445", alias="DISCOVERY_DEFAULT_TCP_PORTS")
+    discovery_run_timeout_seconds: int = Field(default=120, alias="DISCOVERY_RUN_TIMEOUT_SECONDS")
 
     @property
     def db_path(self) -> Path:
@@ -49,6 +55,21 @@ class Settings(BaseSettings):
     @property
     def trusted_proxy_cidrs_list(self) -> list[str]:
         return [part.strip() for part in self.trusted_proxy_cidrs.split(",") if part.strip()]
+
+    @property
+    def discovery_default_tcp_ports_list(self) -> list[int]:
+        ports: list[int] = []
+        for part in self.discovery_default_tcp_ports.split(","):
+            text = part.strip()
+            if not text:
+                continue
+            try:
+                value = int(text)
+            except ValueError:
+                continue
+            if 1 <= value <= 65535:
+                ports.append(value)
+        return ports or [22, 80, 443, 445]
 
 
 @lru_cache

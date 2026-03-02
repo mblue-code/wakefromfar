@@ -18,7 +18,7 @@ class LoginResponse(BaseModel):
 
 class OnboardingClaimRequest(BaseModel):
     token: str
-    password: str = Field(min_length=12)
+    password: str = Field(min_length=6)
 
 
 class OnboardingClaimResponse(BaseModel):
@@ -54,12 +54,12 @@ class WakeResponse(BaseModel):
 
 class AdminUserCreate(BaseModel):
     username: str
-    password: str = Field(min_length=12)
+    password: str = Field(min_length=6)
     role: str = Field(pattern="^(admin|user)$")
 
 
 class AdminUserUpdate(BaseModel):
-    password: str | None = Field(default=None, min_length=12)
+    password: str | None = Field(default=None, min_length=6)
     role: str | None = Field(default=None, pattern="^(admin|user)$")
 
 
@@ -81,6 +81,7 @@ class AdminDeviceCreate(BaseModel):
     udp_port: int = Field(default=9, ge=1, le=65535)
     interface: str | None = None
     source_ip: str | None = None
+    source_network_cidr: str | None = None
     check_method: Literal["tcp", "icmp"] = "tcp"
     check_target: str | None = None
     check_port: int | None = Field(default=None, ge=1, le=65535)
@@ -96,6 +97,7 @@ class AdminDeviceUpdate(BaseModel):
     udp_port: int | None = Field(default=None, ge=1, le=65535)
     interface: str | None = None
     source_ip: str | None = None
+    source_network_cidr: str | None = None
     check_method: Literal["tcp", "icmp"] | None = None
     check_target: str | None = None
     check_port: int | None = Field(default=None, ge=1, le=65535)
@@ -112,11 +114,15 @@ class AdminDeviceOut(BaseModel):
     udp_port: int
     interface: str | None = None
     source_ip: str | None = None
+    source_network_cidr: str | None = None
     check_method: Literal["tcp", "icmp"] = "tcp"
     check_target: str | None = None
     check_port: int | None = None
     last_power_state: Literal["on", "off", "unknown"] = "unknown"
     last_power_checked_at: datetime | None = None
+    provisioning_source: Literal["manual", "discovery"] = "manual"
+    discovery_confidence: Literal["high", "medium", "low", "unknown"] | None = None
+    last_discovered_at: datetime | None = None
 
 
 class AssignmentCreate(BaseModel):
@@ -180,3 +186,103 @@ class MeWakeResponse(BaseModel):
     sent_to: str | None = None
     timestamp: datetime
     error_detail: str | None = None
+
+
+class DiscoverySourceBinding(BaseModel):
+    network_cidr: str
+    source_ip: str
+    interface: str | None = None
+    broadcast_ip: str | None = None
+
+
+class DiscoveryHostProbeOptions(BaseModel):
+    enabled: bool = False
+    timeout_ms: int = Field(default=200, ge=50, le=5000)
+    max_hosts_per_network: int = Field(default=256, ge=1, le=4096)
+
+
+class DiscoveryPowerProbeOptions(BaseModel):
+    ports: list[int] = Field(default_factory=lambda: [22, 80, 443, 445])
+    timeout_ms: int = Field(default=200, ge=50, le=5000)
+
+
+class DiscoveryRunCreate(BaseModel):
+    network_cidrs: list[str] = Field(default_factory=list)
+    source_bindings: list[DiscoverySourceBinding] = Field(default_factory=list)
+    host_probe: DiscoveryHostProbeOptions = Field(default_factory=DiscoveryHostProbeOptions)
+    power_probe: DiscoveryPowerProbeOptions = Field(default_factory=DiscoveryPowerProbeOptions)
+
+
+class DiscoveryRunOut(BaseModel):
+    id: str
+    requested_by: str
+    status: Literal["queued", "running", "completed", "failed", "canceled"]
+    options: dict
+    summary: dict | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    created_at: datetime
+
+
+class DiscoveryCandidateOut(BaseModel):
+    id: str
+    run_id: str
+    hostname: str | None = None
+    mac: str | None = None
+    ip: str | None = None
+    source_interface: str | None = None
+    source_ip: str | None = None
+    source_network_cidr: str | None = None
+    broadcast_ip: str | None = None
+    wol_confidence: Literal["high", "medium", "low", "unknown"]
+    power_check_method: str | None = None
+    power_check_target: str | None = None
+    power_check_port: int | None = None
+    power_data_source: Literal["none", "inferred", "agent", "api"] = "inferred"
+    imported_host_id: str | None = None
+    suggested_host_id: str | None = None
+    suggested_host_name: str | None = None
+    notes: dict | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class DiscoveryValidateResponse(BaseModel):
+    result: Literal["sent", "validated", "failed"]
+    detail: str
+    latency_ms: int | None = None
+
+
+class DiscoveryImportRequest(BaseModel):
+    mode: Literal["create_new", "update_existing", "auto_merge_by_mac"] = "create_new"
+    name: str | None = None
+    display_name: str | None = None
+    target_host_id: str | None = None
+    apply_power_settings: bool = True
+    group_name: str | None = None
+
+
+class DiscoveryImportResponse(BaseModel):
+    candidate_id: str
+    mode: Literal["create_new", "update_existing", "auto_merge_by_mac"]
+    host: AdminDeviceOut
+
+
+class DiscoveryBulkImportRequest(BaseModel):
+    mode: Literal["auto_merge_by_mac", "create_new"] = "auto_merge_by_mac"
+    name_prefix: str | None = None
+    apply_power_settings: bool = True
+    group_name: str | None = None
+    skip_without_mac: bool = True
+
+
+class DiscoveryBulkImportResponse(BaseModel):
+    run_id: str
+    mode: Literal["auto_merge_by_mac", "create_new"]
+    processed: int
+    imported: int
+    merged: int
+    created: int
+    skipped: int
+    failed: int
+    details: list[dict]

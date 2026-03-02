@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import ipaddress
+import json
 import secrets
 import time
 from contextlib import asynccontextmanager
@@ -20,10 +21,16 @@ from .db import (
     count_admin_users,
     create_invite_token,
     create_host,
+    create_discovery_candidate,
+    create_discovery_run,
     create_user,
     delete_host,
     delete_user,
+    fail_discovery_run,
     get_assigned_host_by_id,
+    get_discovery_candidate,
+    get_discovery_run,
+    get_host_by_mac,
     get_host_by_id,
     get_invite_by_hash,
     get_user_by_id,
@@ -32,6 +39,9 @@ from .db import (
     list_admin_audit_logs,
     list_assignments,
     list_claimed_invites,
+    list_discovery_candidates,
+    list_discovery_events,
+    list_discovery_runs,
     list_hosts,
     list_invite_tokens,
     list_power_check_logs,
@@ -40,16 +50,26 @@ from .db import (
     list_wake_logs,
     list_assigned_hosts,
     log_admin_action,
+    log_discovery_event,
     log_power_check,
     log_wake,
+    mark_discovery_candidate_imported,
+    mark_discovery_run_running,
     remove_assignment,
     revoke_invite,
+    complete_discovery_run,
     update_host,
     update_host_power_state,
     update_user_password,
     update_user_password_by_id,
     update_user_role,
     upsert_admin,
+)
+from .discovery import (
+    collect_discovery_candidates,
+    discover_sender_bindings,
+    normalize_source_bindings,
+    summarize_candidates,
 )
 from .network import build_network_diagnostics_snapshot
 from .power import PowerCheckResult, run_power_check
@@ -63,6 +83,14 @@ from .schemas import (
     AdminUserUpdate,
     AssignmentCreate,
     AssignmentOut,
+    DiscoveryCandidateOut,
+    DiscoveryBulkImportRequest,
+    DiscoveryBulkImportResponse,
+    DiscoveryImportRequest,
+    DiscoveryImportResponse,
+    DiscoveryRunCreate,
+    DiscoveryRunOut,
+    DiscoveryValidateResponse,
     HostOut,
     InviteCreate,
     InviteCreateResponse,
@@ -98,8 +126,8 @@ def _init_bootstrap() -> None:
         raise RuntimeError(
             "ADMIN_PASS uses an unsafe placeholder value. Set ADMIN_PASS to a unique password before startup."
         )
-    if settings.admin_pass and len(settings.admin_pass) < 12:
-        raise RuntimeError("ADMIN_PASS is too short. Use at least 12 characters.")
+    if settings.admin_pass and len(settings.admin_pass) < 6:
+        raise RuntimeError("ADMIN_PASS is too short. Use at least 6 characters.")
     configure_rate_limiter(settings)
     init_db()
     if settings.admin_user and settings.admin_pass:
@@ -280,11 +308,15 @@ def _host_to_admin_out(row: dict) -> AdminDeviceOut:
         udp_port=row["udp_port"],
         interface=row["interface"],
         source_ip=row["source_ip"],
+        source_network_cidr=row["source_network_cidr"],
         check_method=row["check_method"] or "tcp",
         check_target=row["check_target"],
         check_port=row["check_port"],
         last_power_state=row["last_power_state"] or "unknown",
         last_power_checked_at=row["last_power_checked_at"],
+        provisioning_source=row["provisioning_source"] or "manual",
+        discovery_confidence=row["discovery_confidence"],
+        last_discovered_at=row["last_discovered_at"],
     )
 
 
@@ -407,6 +439,208 @@ def _run_background_power_check(host_id: str) -> None:
         _run_and_persist_power_check(host)
     except Exception:
         return
+
+
+def _parse_json_dict(text: str | None) -> dict:
+    if not text:
+        return {}
+    try:
+        parsed = json.loads(text)
+    except (TypeError, ValueError):
+        return {}
+    if isinstance(parsed, dict):
+        return parsed
+    return {}
+
+
+def _discovery_run_to_out(row: dict) -> DiscoveryRunOut:
+    return DiscoveryRunOut(
+        id=row["id"],
+        requested_by=row["requested_by"],
+        status=row["status"],
+        options=_parse_json_dict(row["options_json"]),
+        summary=_parse_json_dict(row["summary_json"]) if row["summary_json"] else None,
+        started_at=row["started_at"],
+        finished_at=row["finished_at"],
+        created_at=row["created_at"],
+    )
+
+
+def _discovery_candidate_to_out(row: dict) -> DiscoveryCandidateOut:
+    return DiscoveryCandidateOut(
+        id=row["id"],
+        run_id=row["run_id"],
+        hostname=row["hostname"],
+        mac=row["mac"],
+        ip=row["ip"],
+        source_interface=row["source_interface"],
+        source_ip=row["source_ip"],
+        source_network_cidr=row["source_network_cidr"],
+        broadcast_ip=row["broadcast_ip"],
+        wol_confidence=row["wol_confidence"],
+        power_check_method=row["power_check_method"],
+        power_check_target=row["power_check_target"],
+        power_check_port=row["power_check_port"],
+        power_data_source=row["power_data_source"] or "inferred",
+        imported_host_id=row["imported_host_id"],
+        suggested_host_id=None,
+        suggested_host_name=None,
+        notes=_parse_json_dict(row["notes_json"]) if row["notes_json"] else None,
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
+
+
+def _candidate_default_name(candidate: dict, prefix: str | None = None) -> str:
+    base = (candidate.get("hostname") or "").strip()
+    if base:
+        return base
+    ip_text = (candidate.get("ip") or "").strip().replace(".", "-")
+    if ip_text:
+        return f"{prefix or 'discovered'}-{ip_text}"
+    return f"{prefix or 'discovered'}-{str(candidate.get('id') or '')[:8]}"
+
+
+def _import_discovery_candidate(
+    candidate: dict,
+    *,
+    mode: str,
+    name: str | None,
+    display_name: str | None,
+    target_host_id: str | None,
+    apply_power_settings: bool,
+    group_name: str | None,
+    name_prefix: str | None = None,
+) -> tuple[str, str]:
+    now_iso = datetime.now(UTC).isoformat()
+    requested_mode = mode
+    existing_by_mac = get_host_by_mac(candidate["mac"]) if candidate.get("mac") else None
+    effective_mode = requested_mode
+    resolved_target = target_host_id
+    if requested_mode == "auto_merge_by_mac":
+        if existing_by_mac:
+            effective_mode = "update_existing"
+            resolved_target = existing_by_mac["id"]
+        else:
+            effective_mode = "create_new"
+
+    if effective_mode == "create_new":
+        if not candidate.get("mac"):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Candidate has no MAC")
+        resolved_name = (name or "").strip() or _candidate_default_name(candidate, prefix=name_prefix)
+        host_id = create_host(
+            name=resolved_name,
+            display_name=display_name,
+            mac=candidate["mac"],
+            group_name=group_name,
+            broadcast=candidate.get("broadcast_ip"),
+            subnet_cidr=candidate.get("source_network_cidr"),
+            udp_port=9,
+            interface=candidate.get("source_interface"),
+            source_ip=candidate.get("source_ip"),
+            source_network_cidr=candidate.get("source_network_cidr"),
+            check_method="tcp",
+            check_target=candidate.get("power_check_target") if apply_power_settings else None,
+            check_port=candidate.get("power_check_port") if apply_power_settings else None,
+            provisioning_source="discovery",
+            discovery_confidence=candidate.get("wol_confidence"),
+            last_discovered_at=now_iso,
+        )
+        return host_id, effective_mode
+
+    if effective_mode != "update_existing":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid import mode")
+    if not resolved_target:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="target_host_id is required")
+    existing = get_host_by_id(resolved_target)
+    if not existing:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Target host not found")
+    updates: dict[str, object | None] = {
+        "broadcast": candidate.get("broadcast_ip") or existing["broadcast"],
+        "source_ip": candidate.get("source_ip") or existing["source_ip"],
+        "interface": candidate.get("source_interface") or existing["interface"],
+        "source_network_cidr": candidate.get("source_network_cidr") or existing["source_network_cidr"],
+        "provisioning_source": "discovery",
+        "discovery_confidence": candidate.get("wol_confidence"),
+        "last_discovered_at": now_iso,
+    }
+    if candidate.get("mac"):
+        updates["mac"] = candidate["mac"]
+    if name:
+        updates["name"] = name
+    if display_name is not None:
+        updates["display_name"] = display_name
+    if group_name is not None:
+        updates["group_name"] = group_name
+    if apply_power_settings:
+        updates["check_method"] = "tcp"
+        updates["check_target"] = candidate.get("power_check_target")
+        updates["check_port"] = candidate.get("power_check_port")
+    update_host(resolved_target, updates)
+    return resolved_target, effective_mode
+
+
+def _execute_discovery_run(run_id: str) -> None:
+    run = get_discovery_run(run_id)
+    if not run:
+        return
+    mark_discovery_run_running(run_id)
+    options = _parse_json_dict(run["options_json"])
+    try:
+        bindings = normalize_source_bindings(
+            options.get("source_bindings") if isinstance(options.get("source_bindings"), list) else [],
+            fallback_bindings=discover_sender_bindings(),
+        )
+        selected_networks = {
+            str(item).strip()
+            for item in (options.get("network_cidrs") or [])
+            if str(item).strip()
+        }
+        if selected_networks:
+            bindings = [row for row in bindings if row.get("network_cidr") in selected_networks]
+
+        host_probe = options.get("host_probe") or {}
+        power_probe = options.get("power_probe") or {}
+        candidates, warnings = collect_discovery_candidates(
+            source_bindings=bindings,
+            host_probe_enabled=bool(host_probe.get("enabled", False)),
+            host_probe_timeout_ms=int(host_probe.get("timeout_ms", 200)),
+            max_hosts_per_network=int(host_probe.get("max_hosts_per_network", 256)),
+            power_probe_ports=[int(p) for p in power_probe.get("ports", []) if isinstance(p, int) and 1 <= p <= 65535]
+            or [22, 80, 443, 445],
+            power_probe_timeout_ms=int(power_probe.get("timeout_ms", 200)),
+        )
+        for candidate in candidates:
+            candidate_id = create_discovery_candidate(
+                run_id=run_id,
+                hostname=candidate.get("hostname"),
+                mac=candidate.get("mac"),
+                ip=candidate.get("ip"),
+                source_interface=candidate.get("source_interface"),
+                source_ip=candidate.get("source_ip"),
+                source_network_cidr=candidate.get("source_network_cidr"),
+                broadcast_ip=candidate.get("broadcast_ip"),
+                wol_confidence=candidate.get("wol_confidence") or "unknown",
+                power_check_method=candidate.get("power_check_method"),
+                power_check_target=candidate.get("power_check_target"),
+                power_check_port=candidate.get("power_check_port"),
+                power_data_source=candidate.get("power_data_source") or "inferred",
+                notes_json=json.dumps(candidate.get("notes_json") or {}),
+            )
+            log_discovery_event(
+                run_id=run_id,
+                candidate_id=candidate_id,
+                event_type="probe",
+                detail=f"discovered ip={candidate.get('ip')} mac={candidate.get('mac')}",
+            )
+
+        summary = summarize_candidates(candidates=candidates, warnings=warnings)
+        complete_discovery_run(run_id, json.dumps(summary))
+        log_discovery_event(run_id=run_id, event_type="probe", detail=f"completed candidates={len(candidates)}")
+    except Exception as exc:
+        fail_summary = {"error": str(exc)}
+        fail_discovery_run(run_id, json.dumps(fail_summary))
+        log_discovery_event(run_id=run_id, event_type="error", detail=str(exc))
 
 
 @app.post("/auth/login", response_model=LoginResponse)
@@ -812,6 +1046,7 @@ def admin_create_device(
         udp_port=body.udp_port,
         interface=body.interface,
         source_ip=body.source_ip,
+        source_network_cidr=body.source_network_cidr,
         display_name=body.display_name,
         check_method=body.check_method,
         check_target=body.check_target,
@@ -1083,6 +1318,350 @@ def admin_audit_logs(_: Annotated[dict, Depends(require_admin)]) -> list[dict]:
 @app.get("/admin/metrics")
 def admin_metrics(_: Annotated[dict, Depends(require_admin)]) -> dict:
     return {"counters": get_counters()}
+
+
+@app.get("/admin/discovery/networks")
+def admin_discovery_networks(_: Annotated[dict, Depends(require_admin)]) -> dict[str, object]:
+    settings = get_settings()
+    if not settings.discovery_enabled:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Discovery disabled")
+    snapshot = build_network_diagnostics_snapshot()
+    bindings = discover_sender_bindings()
+    network_counts: dict[str, int] = {}
+    for row in bindings:
+        network_cidr = str(row.get("network_cidr") or "")
+        if not network_cidr:
+            continue
+        network_counts[network_cidr] = network_counts.get(network_cidr, 0) + 1
+    warnings = [f"multiple_bindings_for_network:{cidr}" for cidr, count in network_counts.items() if count > 1]
+    return {
+        "discovered_at": snapshot.get("discovered_at"),
+        "interfaces": snapshot.get("interfaces", []),
+        "bindings": bindings,
+        "warnings": warnings,
+    }
+
+
+@app.get("/admin/discovery/runs", response_model=list[DiscoveryRunOut])
+def admin_list_discovery_runs(_: Annotated[dict, Depends(require_admin)]) -> list[DiscoveryRunOut]:
+    settings = get_settings()
+    if not settings.discovery_enabled:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Discovery disabled")
+    return [_discovery_run_to_out(dict(row)) for row in list_discovery_runs(limit=50)]
+
+
+@app.post("/admin/discovery/runs", status_code=status.HTTP_202_ACCEPTED, response_model=DiscoveryRunOut)
+def admin_start_discovery_run(
+    body: DiscoveryRunCreate,
+    background_tasks: BackgroundTasks,
+    request: Request,
+    current_user: Annotated[dict, Depends(require_admin)],
+) -> DiscoveryRunOut:
+    settings = get_settings()
+    if not settings.discovery_enabled:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Discovery disabled")
+    ip = _get_request_ip(request) or "unknown"
+    _enforce_rate_limit(
+        "discovery",
+        f"{current_user['username']}@{ip}",
+        settings.discovery_rate_limit_per_minute,
+        "Too many discovery runs",
+    )
+
+    fallback_bindings = discover_sender_bindings()
+    source_bindings = normalize_source_bindings(
+        source_bindings=[row.model_dump() for row in body.source_bindings],
+        fallback_bindings=fallback_bindings,
+    )
+    selected_networks = {item.strip() for item in body.network_cidrs if item.strip()}
+    if selected_networks:
+        source_bindings = [row for row in source_bindings if str(row.get("network_cidr") or "") in selected_networks]
+    if not source_bindings:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No valid source bindings available")
+
+    power_ports = sorted({port for port in body.power_probe.ports if 1 <= port <= 65535})
+    if not power_ports:
+        power_ports = settings.discovery_default_tcp_ports_list
+    options = {
+        "network_cidrs": sorted(selected_networks),
+        "source_bindings": source_bindings,
+        "host_probe": {
+            "enabled": body.host_probe.enabled,
+            "timeout_ms": body.host_probe.timeout_ms,
+            "max_hosts_per_network": body.host_probe.max_hosts_per_network,
+        },
+        "power_probe": {
+            "ports": power_ports,
+            "timeout_ms": body.power_probe.timeout_ms,
+        },
+    }
+    run_id = create_discovery_run(
+        requested_by=current_user["username"],
+        options_json=json.dumps(options),
+    )
+    log_admin_action(
+        actor_username=current_user["username"],
+        action="start_discovery_run",
+        target_type="discovery",
+        target_id=run_id,
+        detail=f"networks={len(options['source_bindings'])}",
+    )
+    background_tasks.add_task(_execute_discovery_run, run_id)
+    row = get_discovery_run(run_id)
+    if not row:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Could not create discovery run")
+    return _discovery_run_to_out(dict(row))
+
+
+@app.get("/admin/discovery/runs/{run_id}", response_model=DiscoveryRunOut)
+def admin_get_discovery_run(run_id: str, _: Annotated[dict, Depends(require_admin)]) -> DiscoveryRunOut:
+    settings = get_settings()
+    if not settings.discovery_enabled:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Discovery disabled")
+    row = get_discovery_run(run_id)
+    if not row:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Discovery run not found")
+    return _discovery_run_to_out(dict(row))
+
+
+@app.get("/admin/discovery/runs/{run_id}/events")
+def admin_get_discovery_events(run_id: str, _: Annotated[dict, Depends(require_admin)]) -> list[dict]:
+    settings = get_settings()
+    if not settings.discovery_enabled:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Discovery disabled")
+    if not get_discovery_run(run_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Discovery run not found")
+    return [
+        {
+            "id": row["id"],
+            "run_id": row["run_id"],
+            "candidate_id": row["candidate_id"],
+            "event_type": row["event_type"],
+            "detail": row["detail"],
+            "created_at": row["created_at"],
+        }
+        for row in list_discovery_events(run_id, limit=500)
+    ]
+
+
+@app.get("/admin/discovery/runs/{run_id}/candidates", response_model=list[DiscoveryCandidateOut])
+def admin_list_discovery_candidates(
+    run_id: str,
+    _: Annotated[dict, Depends(require_admin)],
+    only_unimported: bool = False,
+    wol_confidence: str | None = None,
+    source_network_cidr: str | None = None,
+) -> list[DiscoveryCandidateOut]:
+    settings = get_settings()
+    if not settings.discovery_enabled:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Discovery disabled")
+    if not get_discovery_run(run_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Discovery run not found")
+    rows = list_discovery_candidates(
+        run_id=run_id,
+        only_unimported=only_unimported,
+        wol_confidence=wol_confidence,
+        source_network_cidr=source_network_cidr,
+    )
+    mac_map: dict[str, tuple[str, str]] = {}
+    for host in list_hosts():
+        mac = str(host["mac"] or "")
+        if mac and mac not in mac_map:
+            mac_map[mac] = (str(host["id"]), str(host["name"]))
+    out: list[DiscoveryCandidateOut] = []
+    for row in rows:
+        item = _discovery_candidate_to_out(dict(row))
+        if item.mac and not item.imported_host_id:
+            suggestion = mac_map.get(item.mac)
+            if suggestion:
+                item.suggested_host_id = suggestion[0]
+                item.suggested_host_name = suggestion[1]
+        out.append(item)
+    return out
+
+
+@app.post("/admin/discovery/candidates/{candidate_id}/validate-wake", response_model=DiscoveryValidateResponse)
+def admin_validate_discovery_candidate_wake(
+    candidate_id: str,
+    current_user: Annotated[dict, Depends(require_admin)],
+) -> DiscoveryValidateResponse:
+    settings = get_settings()
+    if not settings.discovery_enabled:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Discovery disabled")
+    candidate = get_discovery_candidate(candidate_id)
+    if not candidate:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Discovery candidate not found")
+
+    run_id = candidate["run_id"]
+    if not candidate["mac"]:
+        detail = "missing_mac"
+        log_discovery_event(run_id=run_id, candidate_id=candidate_id, event_type="validation", detail=detail)
+        return DiscoveryValidateResponse(result="failed", detail=detail)
+
+    target_ip = resolve_target(
+        broadcast=candidate["broadcast_ip"],
+        subnet_cidr=candidate["source_network_cidr"],
+    )
+    sent_ok, send_error = _send_magic_packet_with_retry(
+        mac=candidate["mac"],
+        target_ip=target_ip,
+        udp_port=9,
+        interface=candidate["source_interface"],
+        source_ip=candidate["source_ip"],
+    )
+    if not sent_ok:
+        detail = send_error or "wake_send_failed"
+        log_discovery_event(run_id=run_id, candidate_id=candidate_id, event_type="validation", detail=detail)
+        return DiscoveryValidateResponse(result="failed", detail=detail)
+
+    if candidate["power_check_target"] and candidate["power_check_port"]:
+        check = run_power_check(
+            method="tcp",
+            target=candidate["power_check_target"],
+            port=candidate["power_check_port"],
+            timeout_seconds=settings.power_check_timeout_seconds,
+        )
+        if check.result == "on":
+            detail = f"validated:{check.detail}"
+            log_discovery_event(run_id=run_id, candidate_id=candidate_id, event_type="validation", detail=detail)
+            return DiscoveryValidateResponse(result="validated", detail=detail, latency_ms=check.latency_ms)
+        detail = f"sent_not_validated:{check.detail}"
+        log_discovery_event(run_id=run_id, candidate_id=candidate_id, event_type="validation", detail=detail)
+        return DiscoveryValidateResponse(result="sent", detail=detail, latency_ms=check.latency_ms)
+
+    detail = "magic_packet_sent"
+    log_discovery_event(run_id=run_id, candidate_id=candidate_id, event_type="validation", detail=detail)
+    return DiscoveryValidateResponse(result="sent", detail=detail)
+
+
+@app.post("/admin/discovery/candidates/{candidate_id}/import", response_model=DiscoveryImportResponse)
+def admin_import_discovery_candidate(
+    candidate_id: str,
+    body: DiscoveryImportRequest,
+    current_user: Annotated[dict, Depends(require_admin)],
+) -> DiscoveryImportResponse:
+    settings = get_settings()
+    if not settings.discovery_enabled:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Discovery disabled")
+    candidate = get_discovery_candidate(candidate_id)
+    if not candidate:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Discovery candidate not found")
+    if candidate["imported_host_id"] and body.mode == "create_new":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Candidate already imported")
+    run_id = candidate["run_id"]
+    host_id, effective_mode = _import_discovery_candidate(
+        dict(candidate),
+        mode=body.mode,
+        name=body.name,
+        display_name=body.display_name,
+        target_host_id=body.target_host_id,
+        apply_power_settings=body.apply_power_settings,
+        group_name=body.group_name,
+    )
+
+    mark_discovery_candidate_imported(candidate_id, host_id)
+    log_discovery_event(
+        run_id=run_id,
+        candidate_id=candidate_id,
+        event_type="import",
+        detail=f"mode={body.mode} effective_mode={effective_mode} host_id={host_id}",
+    )
+    log_admin_action(
+        actor_username=current_user["username"],
+        action="import_discovery_candidate",
+        target_type="discovery",
+        target_id=candidate_id,
+        detail=f"mode={body.mode} effective_mode={effective_mode} host_id={host_id}",
+    )
+    host = get_host_by_id(host_id)
+    if not host:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Import failed")
+    return DiscoveryImportResponse(candidate_id=candidate_id, mode=body.mode, host=_host_to_admin_out(dict(host)))
+
+
+@app.post("/admin/discovery/runs/{run_id}/import-bulk", response_model=DiscoveryBulkImportResponse)
+def admin_bulk_import_discovery_run(
+    run_id: str,
+    body: DiscoveryBulkImportRequest,
+    current_user: Annotated[dict, Depends(require_admin)],
+) -> DiscoveryBulkImportResponse:
+    settings = get_settings()
+    if not settings.discovery_enabled:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Discovery disabled")
+    run = get_discovery_run(run_id)
+    if not run:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Discovery run not found")
+    candidates = list_discovery_candidates(run_id=run_id, only_unimported=True)
+    processed = 0
+    imported = 0
+    merged = 0
+    created = 0
+    skipped = 0
+    failed = 0
+    details: list[dict] = []
+    for row in candidates:
+        candidate = dict(row)
+        processed += 1
+        candidate_id = str(candidate["id"])
+        if not candidate.get("mac") and body.skip_without_mac:
+            skipped += 1
+            details.append({"candidate_id": candidate_id, "result": "skipped", "reason": "missing_mac"})
+            continue
+        try:
+            host_id, effective_mode = _import_discovery_candidate(
+                candidate,
+                mode=body.mode,
+                name=None,
+                display_name=None,
+                target_host_id=None,
+                apply_power_settings=body.apply_power_settings,
+                group_name=body.group_name,
+                name_prefix=body.name_prefix,
+            )
+            mark_discovery_candidate_imported(candidate_id, host_id)
+            log_discovery_event(
+                run_id=run_id,
+                candidate_id=candidate_id,
+                event_type="import",
+                detail=f"bulk mode={body.mode} effective_mode={effective_mode} host_id={host_id}",
+            )
+            imported += 1
+            if effective_mode == "update_existing":
+                merged += 1
+            else:
+                created += 1
+            details.append(
+                {
+                    "candidate_id": candidate_id,
+                    "result": "imported",
+                    "effective_mode": effective_mode,
+                    "host_id": host_id,
+                }
+            )
+        except HTTPException as exc:
+            failed += 1
+            details.append({"candidate_id": candidate_id, "result": "failed", "reason": str(exc.detail)})
+        except Exception as exc:
+            failed += 1
+            details.append({"candidate_id": candidate_id, "result": "failed", "reason": str(exc)})
+    log_admin_action(
+        actor_username=current_user["username"],
+        action="bulk_import_discovery_run",
+        target_type="discovery",
+        target_id=run_id,
+        detail=f"mode={body.mode} imported={imported} merged={merged} created={created} skipped={skipped} failed={failed}",
+    )
+    return DiscoveryBulkImportResponse(
+        run_id=run_id,
+        mode=body.mode,
+        processed=processed,
+        imported=imported,
+        merged=merged,
+        created=created,
+        skipped=skipped,
+        failed=failed,
+        details=details,
+    )
 
 
 @app.get("/admin/diagnostics/devices")

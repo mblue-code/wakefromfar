@@ -79,6 +79,7 @@ Initialer Admin wird aus ENV angelegt (`ADMIN_USER`, `ADMIN_PASS`), falls User n
   - Assignments
   - Invite-Generierung inkl. Deep-Link + QR
   - Wake- und Power-Check-Logs mit Filtern
+  - Discovery Wizard (Netzwerke scannen, Kandidaten validieren, in Devices importieren)
   - Diagnostics, Audit Logs, Metrics, Pilot Metrics (Sprint 3)
 
 ### Hardening / Sprint 3
@@ -89,6 +90,14 @@ Zusätzliche Admin-APIs:
 - `GET /admin/metrics`
 - `GET /admin/diagnostics/devices`
 - `GET /admin/pilot-metrics`
+- Discovery:
+  - `GET /admin/discovery/networks`
+  - `GET/POST /admin/discovery/runs`
+  - `GET /admin/discovery/runs/{id}`
+  - `GET /admin/discovery/runs/{id}/candidates`
+  - `POST /admin/discovery/runs/{id}/import-bulk`
+  - `POST /admin/discovery/candidates/{id}/validate-wake`
+  - `POST /admin/discovery/candidates/{id}/import`
 
 Runbook/Release-Checklist:
 
@@ -140,6 +149,10 @@ docker compose exec wol-backend python -m app.cli add-host --name Proxmox --mac 
 - `GET/POST/DELETE /admin/assignments` (admin)
 - `GET/POST /admin/invites` + `POST /admin/invites/{id}/revoke` (admin)
 - `GET /admin/wake-logs`, `GET /admin/power-check-logs` (admin)
+- `GET /admin/discovery/networks`, `GET/POST /admin/discovery/runs` (admin)
+- `GET /admin/discovery/runs/{id}`, `GET /admin/discovery/runs/{id}/candidates` (admin)
+- `POST /admin/discovery/runs/{id}/import-bulk` (admin)
+- `POST /admin/discovery/candidates/{id}/validate-wake`, `POST /admin/discovery/candidates/{id}/import` (admin)
 - Legacy (deprecated): `GET /hosts`, `POST /hosts/{id}/wake`, `POST /admin/hosts`
 
 Beispiel Login Body:
