@@ -152,8 +152,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             state = state.copy(error = tr(R.string.error_backend_required))
             return
         }
-        if (state.claimPassword.length < 12) {
-            state = state.copy(error = tr(R.string.error_password_min_length, 12))
+        if (state.claimPassword.length < 6) {
+            state = state.copy(error = tr(R.string.error_password_min_length, 6))
             return
         }
 
