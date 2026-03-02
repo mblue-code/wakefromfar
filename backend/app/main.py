@@ -263,6 +263,11 @@ def _enforce_rate_limit(
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=detail)
 
 
+@app.get("/")
+def root():
+    return RedirectResponse("/admin/ui/login", status_code=302)
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"ok": "true"}

@@ -16,7 +16,13 @@ fi
 mkdir -p "${ROOT_DIR}/data-prod"
 
 # Build and start production profile (separate data volume) for betatesting.
-docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+# Include mDNS overlay if avahi-daemon socket is present on this host.
+MDNS_OVERLAY=""
+if [ -S /var/run/avahi-daemon/socket ]; then
+  MDNS_OVERLAY="-f docker-compose.mdns.yml"
+fi
+# shellcheck disable=SC2086
+docker compose -f docker-compose.yml -f docker-compose.prod.yml $MDNS_OVERLAY up -d --build
 
 echo "Backend deployed. Local health check:"
 curl -fsS http://127.0.0.1:8080/health && echo

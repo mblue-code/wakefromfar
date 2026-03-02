@@ -27,6 +27,7 @@ services:
       POWER_STATE_STALE_SECONDS: ${POWER_STATE_STALE_SECONDS:-20}
     volumes:
       - ./data:/data
+      - /etc/resolv.conf:/etc/resolv.conf:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=2).read()"]
       interval: 30s

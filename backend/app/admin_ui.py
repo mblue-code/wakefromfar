@@ -535,6 +535,14 @@ _BADGE_COLORS = {
 }
 
 
+def _device_cell(device_id: str | None, name_map: dict[str, str]) -> str:
+    did = str(device_id or "")
+    name = name_map.get(did)
+    if name:
+        return f'<span title="{_esc(did)}">{_esc(name)}</span>'
+    return _esc(did)
+
+
 def _badge(value: str) -> str:
     color = _BADGE_COLORS.get(value.lower(), "#666")
     return f'<span class="badge" style="background:{color}">{_esc(value)}</span>'
@@ -680,24 +688,40 @@ def _layout(request: Request, title: str, body: str, admin_username: str, messag
     </aside>"""
 
     css = """
-:root{--sidebar-w:220px;--sidebar-bg:#1a1f2e;--sidebar-text:#b8c0d0;--sidebar-active:#fff;--sidebar-active-bg:rgba(255,255,255,.12);--topbar-h:56px}
+:root{
+  --sidebar-w:220px;--sidebar-bg:#1a1f2e;--sidebar-text:#b8c0d0;--sidebar-active:#fff;--sidebar-active-bg:rgba(255,255,255,.12);--topbar-h:56px;
+  --bg:#f5f7fb;--fg:#1f2937;--card-bg:#fff;--card-border:#d7dce3;
+  --topbar-bg:#fff;--topbar-border:#d7dce3;
+  --input-bg:#fff;--input-border:#cbd5e1;--input-fg:#111827;
+  --table-bg:#fff;--table-border:#d7dce3;--thead-bg:#f8fafc;--row-border:#e5e7eb;
+  --muted:#64748b;--link:#1d4ed8;--code-bg:#f2f4f8;--code-border:#d7dce3;
+  --btn-bg:#0f172a;--btn-border:#0f172a;--btn2-bg:#fff;--btn2-fg:#334155;--btn2-border:#94a3b8;
+}
+[data-theme="dark"]{
+  --bg:#0f1117;--fg:#e2e8f0;--card-bg:#1e2433;--card-border:#2d3748;
+  --topbar-bg:#1a1f2e;--topbar-border:#2d3748;
+  --input-bg:#2d3748;--input-border:#4a5568;--input-fg:#e2e8f0;
+  --table-bg:#1e2433;--table-border:#2d3748;--thead-bg:#252d3d;--row-border:#2d3748;
+  --muted:#94a3b8;--link:#60a5fa;--code-bg:#252d3d;--code-border:#374151;
+  --btn-bg:#334155;--btn-border:#475569;--btn2-bg:#2d3748;--btn2-fg:#cbd5e1;--btn2-border:#4a5568;
+}
 *{box-sizing:border-box}
 html,body{margin:0;padding:0}
-body{font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;background:#f5f7fb;color:#1f2937;line-height:1.45}
-a{color:#1d4ed8}
+body{font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--fg);line-height:1.45;transition:background .2s,color .2s}
+a{color:var(--link)}
 h1,h2,h3{margin:0 0 .8rem}
 h2{font-size:1.1rem}
 p{margin:.35rem 0 .75rem}
-article{background:#fff;border:1px solid #d7dce3;border-radius:10px;padding:1rem;margin:0 0 1rem}
+article{background:var(--card-bg);border:1px solid var(--card-border);border-radius:10px;padding:1rem;margin:0 0 1rem}
 button,input,select{font:inherit}
-input,select{width:100%;max-width:100%;padding:.45rem .6rem;border:1px solid #cbd5e1;border-radius:8px;background:#fff;color:#111827}
-button{padding:.45rem .85rem;border:1px solid #0f172a;border-radius:8px;background:#0f172a;color:#fff;cursor:pointer}
+input,select{width:100%;max-width:100%;padding:.45rem .6rem;border:1px solid var(--input-border);border-radius:8px;background:var(--input-bg);color:var(--input-fg)}
+button{padding:.45rem .85rem;border:1px solid var(--btn-border);border-radius:8px;background:var(--btn-bg);color:#fff;cursor:pointer}
 button:hover{filter:brightness(.95)}
-button.secondary{background:#fff;color:#334155;border-color:#94a3b8}
-code{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,Liberation Mono,monospace;font-size:.85em;background:#f2f4f8;border:1px solid #d7dce3;border-radius:6px;padding:.1rem .3rem}
-table{width:100%;font-size:.875rem;border-collapse:collapse;background:#fff;border:1px solid #d7dce3}
-th,td{padding:.5rem .55rem;text-align:left;vertical-align:top;border-bottom:1px solid #e5e7eb}
-thead th{background:#f8fafc;font-weight:600}
+button.secondary{background:var(--btn2-bg);color:var(--btn2-fg);border-color:var(--btn2-border)}
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,Liberation Mono,monospace;font-size:.85em;background:var(--code-bg);border:1px solid var(--code-border);border-radius:6px;padding:.1rem .3rem}
+table{width:100%;font-size:.875rem;border-collapse:collapse;background:var(--table-bg);border:1px solid var(--table-border)}
+th,td{padding:.5rem .55rem;text-align:left;vertical-align:top;border-bottom:1px solid var(--row-border)}
+thead th{background:var(--thead-bg);font-weight:600}
 tr:last-child td{border-bottom:none}
 .admin-shell{display:grid;grid-template-columns:var(--sidebar-w) 1fr;min-height:100vh}
 .sidebar{background:var(--sidebar-bg);color:var(--sidebar-text);position:sticky;top:0;height:100vh;overflow-y:auto;display:flex;flex-direction:column}
@@ -708,12 +732,14 @@ tr:last-child td{border-bottom:none}
 .sidebar nav a[aria-current="page"]{background:var(--sidebar-active-bg);color:var(--sidebar-active);font-weight:600}
 .nav-sep{height:1px;background:rgba(255,255,255,.08);margin:.4rem .75rem}
 .main-area{display:flex;flex-direction:column;min-height:100vh}
-.topbar{height:var(--topbar-h);display:flex;align-items:center;padding:0 1.5rem;gap:1rem;background:#fff;border-bottom:1px solid #d7dce3;position:sticky;top:0;z-index:10}
+.topbar{height:var(--topbar-h);display:flex;align-items:center;padding:0 1.5rem;gap:1rem;background:var(--topbar-bg);border-bottom:1px solid var(--topbar-border);position:sticky;top:0;z-index:10;transition:background .2s,border-color .2s}
 .topbar-title{font-weight:600;font-size:1rem;flex:1}
 .topbar-right{display:flex;align-items:center;gap:1rem;flex-wrap:wrap}
-.topbar-user{font-size:.875rem;color:#64748b}
-.lang-switch{font-size:.8rem;color:#64748b}
+.topbar-user{font-size:.875rem;color:var(--muted)}
+.lang-switch{font-size:.8rem;color:var(--muted)}
 .lang-switch a{color:inherit}
+.theme-toggle{background:none;border:1px solid var(--input-border);border-radius:8px;color:var(--fg);padding:.3rem .6rem;font-size:.85rem;cursor:pointer;line-height:1}
+.theme-toggle:hover{background:var(--input-bg)}
 main.container-fluid{padding:1.5rem;flex:1}
 .flash{display:flex;align-items:center;justify-content:space-between;padding:.75rem 1rem;border-radius:8px;margin-bottom:1rem;font-size:.9rem}
 .flash-ok{background:#d1f0da;color:#1a5e2e;border:1px solid #a8ddb5}
@@ -722,7 +748,7 @@ main.container-fluid{padding:1.5rem;flex:1}
 .stat-cards{display:grid;grid-template-columns:repeat(4,1fr);gap:1rem;margin-bottom:1.5rem}
 .stat-card{text-align:center;padding:1.25rem}
 .stat-number{display:block;font-size:2rem;font-weight:700;line-height:1.1}
-.stat-label{display:block;font-size:.8rem;color:#64748b;margin-top:.25rem;text-transform:uppercase;letter-spacing:.05em}
+.stat-label{display:block;font-size:.8rem;color:var(--muted);margin-top:.25rem;text-transform:uppercase;letter-spacing:.05em}
 .badge{display:inline-block;padding:.2em .55em;border-radius:99px;font-size:.75rem;font-weight:600;color:#fff;white-space:nowrap}
 form{margin-bottom:0}
 figure{overflow-x:auto;margin:0 0 1rem}
@@ -741,15 +767,32 @@ document.querySelectorAll('.flash').forEach(function(el){
   var btn=el.querySelector('.flash-close');
   if(btn)btn.addEventListener('click',function(){el.remove()});
   setTimeout(function(){if(el.parentNode)el.remove()},4000);
-});"""
+});
+(function(){
+  var root=document.documentElement;
+  var btn=document.getElementById('theme-toggle');
+  var stored=localStorage.getItem('wff-theme');
+  var dark=stored?stored==='dark':window.matchMedia('(prefers-color-scheme: dark)').matches;
+  function apply(d){
+    root.dataset.theme=d?'dark':'light';
+    if(btn)btn.textContent=d?'☀️':'🌙';
+  }
+  apply(dark);
+  if(btn)btn.addEventListener('click',function(){
+    dark=!dark;
+    localStorage.setItem('wff-theme',dark?'dark':'light');
+    apply(dark);
+  });
+})();"""
 
     page = f"""<!doctype html>
-<html data-theme="auto">
+<html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>{_esc(title)} — WakeFromFar Admin</title>
   <link rel="icon" type="image/png" href="/admin/ui/favicon.png">
+  <script>document.documentElement.dataset.theme=localStorage.getItem('wff-theme')||(window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light');</script>
   <style>{css}</style>
 </head>
 <body>
@@ -761,6 +804,7 @@ document.querySelectorAll('.flash').forEach(function(el){
         <div class="topbar-right">
           <span class="topbar-user">{t("signed_in_as")} <strong>{_esc(admin_username)}</strong></span>
           <span class="lang-switch"><a href="{_esc(_lang_switch_url(request, 'en'))}">{t("lang_en")}</a> | <a href="{_esc(_lang_switch_url(request, 'de'))}">{t("lang_de")}</a></span>
+          <button class="theme-toggle" id="theme-toggle" title="Toggle dark mode" aria-label="Toggle dark mode">🌙</button>
           <a href="{_with_lang('/admin/ui/logout', lang)}">{t("nav_logout")}</a>
         </div>
       </header>
@@ -990,27 +1034,30 @@ def login_page(request: Request, next: str = "/admin/ui", error: str | None = No
         return RedirectResponse(safe_next, status_code=303)
     error_html = f'<p class="login-error">{_esc(error)}</p>' if error else ""
     page = f"""<!doctype html>
-<html data-theme="auto">
+<html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>{t("title_admin_login")}</title>
   <link rel="icon" type="image/png" href="/admin/ui/favicon.png">
+  <script>document.documentElement.dataset.theme=localStorage.getItem('wff-theme')||(window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light');</script>
   <style>
+:root{{--bg:#f5f7fb;--fg:#1f2937;--card-bg:#fff;--card-border:#d7dce3;--input-bg:#fff;--input-border:#cbd5e1;--input-fg:#111827;--muted:#64748b;--btn-bg:#0f172a;--btn-border:#0f172a}}
+[data-theme="dark"]{{--bg:#0f1117;--fg:#e2e8f0;--card-bg:#1e2433;--card-border:#2d3748;--input-bg:#2d3748;--input-border:#4a5568;--input-fg:#e2e8f0;--muted:#94a3b8;--btn-bg:#334155;--btn-border:#475569}}
 *{{box-sizing:border-box}}
 html,body{{margin:0;padding:0}}
-body{{display:flex;align-items:center;justify-content:center;min-height:100vh;padding:1rem;font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;background:#f5f7fb;color:#1f2937}}
+body{{display:flex;align-items:center;justify-content:center;min-height:100vh;padding:1rem;font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--fg)}}
 .login-card{{width:100%;max-width:380px}}
-.login-card{{background:#fff;border:1px solid #d7dce3;border-radius:12px;padding:1rem}}
+.login-card{{background:var(--card-bg);border:1px solid var(--card-border);border-radius:12px;padding:1rem}}
 .login-brand{{text-align:center;margin-bottom:1.5rem}}
 .login-brand h1{{font-size:1.5rem;margin:0}}
-.login-brand p{{color:#64748b;font-size:.875rem;margin:.25rem 0 0}}
+.login-brand p{{color:var(--muted);font-size:.875rem;margin:.25rem 0 0}}
 .login-error{{color:#7b1a1a;background:#fde8e8;border:1px solid #f5b7b7;border-radius:8px;padding:.6rem .9rem;font-size:.875rem}}
 label{{display:block;margin:.45rem 0 .2rem}}
-input{{width:100%;max-width:100%;padding:.5rem .6rem;border:1px solid #cbd5e1;border-radius:8px;background:#fff;color:#111827}}
-button{{margin-top:.65rem;width:100%;padding:.5rem .85rem;border:1px solid #0f172a;border-radius:8px;background:#0f172a;color:#fff;cursor:pointer;font:inherit}}
+input{{width:100%;max-width:100%;padding:.5rem .6rem;border:1px solid var(--input-border);border-radius:8px;background:var(--input-bg);color:var(--input-fg);font:inherit}}
+button{{margin-top:.65rem;width:100%;padding:.5rem .85rem;border:1px solid var(--btn-border);border-radius:8px;background:var(--btn-bg);color:#fff;cursor:pointer;font:inherit}}
 button:hover{{filter:brightness(.95)}}
-.lang-footer{{text-align:center;margin-top:1rem;font-size:.8rem;color:#64748b}}
+.lang-footer{{text-align:center;margin-top:1rem;font-size:.8rem;color:var(--muted)}}
 .lang-footer a{{color:inherit}}
   </style>
 </head>
@@ -1099,7 +1146,9 @@ def dashboard(request: Request):
     assignments = list_assignments()
     wake_logs = list_wake_logs(limit=10)
     power_logs = list_power_check_logs(limit=10)
+    device_name_map = {str(h["id"]): str(h["name"]) for h in devices}
     message, error = _msg(request)
+    selected_run_id = request.query_params.get("run_id")
     bulk_form = ""
     if selected_run_id:
         bulk_form = f"""
@@ -1127,12 +1176,12 @@ def dashboard(request: Request):
     <h2>{t("heading_recent_wake_logs")}</h2>
     <figure><table>
       <thead><tr><th>{t("col_id")}</th><th>{t("col_device")}</th><th>{t("col_actor")}</th><th>{t("col_result")}</th><th>{t("col_time")}</th></tr></thead>
-      <tbody>{"".join(f"<tr><td>{row['id']}</td><td>{_esc(row['host_id'])}</td><td>{_esc(row['actor_username'])}</td><td>{_badge(str(row['result']))}</td><td>{_esc(row['created_at'])}</td></tr>" for row in wake_logs)}</tbody>
+      <tbody>{"".join(f"<tr><td>{row['id']}</td><td>{_device_cell(row['host_id'], device_name_map)}</td><td>{_esc(row['actor_username'])}</td><td>{_badge(str(row['result']))}</td><td>{_esc(row['created_at'])}</td></tr>" for row in wake_logs)}</tbody>
     </table></figure>
     <h2>{t("heading_recent_power_checks")}</h2>
     <figure><table>
       <thead><tr><th>{t("col_id")}</th><th>{t("col_device")}</th><th>{t("col_method")}</th><th>{t("col_result")}</th><th>{t("col_time")}</th></tr></thead>
-      <tbody>{"".join(f"<tr><td>{row['id']}</td><td>{_esc(row['device_id'])}</td><td>{_badge(str(row['method']))}</td><td>{_badge(str(row['result']))}</td><td>{_esc(row['created_at'])}</td></tr>" for row in power_logs)}</tbody>
+      <tbody>{"".join(f"<tr><td>{row['id']}</td><td>{_device_cell(row['device_id'], device_name_map)}</td><td>{_badge(str(row['method']))}</td><td>{_badge(str(row['result']))}</td><td>{_esc(row['created_at'])}</td></tr>" for row in power_logs)}</tbody>
     </table></figure>
     """
     return _layout(request, t("title_admin_dashboard"), body, user["username"], message=message, error=error)
@@ -1712,9 +1761,10 @@ def wake_logs_page(
         rows = [row for row in rows if actor.lower() in str(row["actor_username"]).lower()]
     if host_id:
         rows = [row for row in rows if host_id.lower() in str(row["host_id"]).lower()]
+    device_name_map = {str(h["id"]): str(h["name"]) for h in list_hosts()}
     message, error = _msg(request)
     body_rows = "".join(
-        f"<tr><td>{row['id']}</td><td>{_esc(row['host_id'])}</td><td>{_esc(row['actor_username'])}</td><td>{_badge(str(row['result']))}</td><td>{_esc(row['precheck_state'])}</td><td>{_esc(row['error_detail'])}</td><td>{_esc(row['created_at'])}</td></tr>"
+        f"<tr><td>{row['id']}</td><td>{_device_cell(row['host_id'], device_name_map)}</td><td>{_esc(row['actor_username'])}</td><td>{_badge(str(row['result']))}</td><td>{_esc(row['precheck_state'])}</td><td>{_esc(row['error_detail'])}</td><td>{_esc(row['created_at'])}</td></tr>"
         for row in rows
     )
     body = f"""
@@ -1759,9 +1809,10 @@ def power_logs_page(
         rows = [row for row in rows if row["method"] == method]
     if device_id:
         rows = [row for row in rows if device_id.lower() in str(row["device_id"]).lower()]
+    device_name_map = {str(h["id"]): str(h["name"]) for h in list_hosts()}
     message, error = _msg(request)
     body_rows = "".join(
-        f"<tr><td>{row['id']}</td><td>{_esc(row['device_id'])}</td><td>{_badge(str(row['method']))}</td><td>{_badge(str(row['result']))}</td><td>{_esc(row['detail'])}</td><td>{_esc(row['latency_ms'])}</td><td>{_esc(row['created_at'])}</td></tr>"
+        f"<tr><td>{row['id']}</td><td>{_device_cell(row['device_id'], device_name_map)}</td><td>{_badge(str(row['method']))}</td><td>{_badge(str(row['result']))}</td><td>{_esc(row['detail'])}</td><td>{_esc(row['latency_ms'])}</td><td>{_esc(row['created_at'])}</td></tr>"
         for row in rows
     )
     body = f"""
@@ -1834,8 +1885,13 @@ def diagnostics_page(request: Request):
     return _layout(request, t("title_diagnostics"), body, admin["username"], message=message, error=error)
 
 
+def _is_docker_candidate(row: sqlite3.Row) -> bool:
+    iface = str(row["source_interface"] or "")
+    return iface.startswith("br-") or iface in {"docker0", "veth"}
+
+
 @router.get("/discovery", response_class=HTMLResponse)
-def discovery_page(request: Request, run_id: str = ""):
+def discovery_page(request: Request, run_id: str = "", show_docker: str = ""):
     admin = _require_admin_or_redirect(request)
     if isinstance(admin, RedirectResponse):
         return admin
@@ -1849,7 +1905,10 @@ def discovery_page(request: Request, run_id: str = ""):
     bindings = discover_sender_bindings()
     runs = list_discovery_runs(limit=30)
     selected_run_id = run_id.strip() or (str(runs[0]["id"]) if runs else "")
-    candidates = list_discovery_candidates(selected_run_id) if selected_run_id else []
+    all_candidates = list_discovery_candidates(selected_run_id) if selected_run_id else []
+    show_docker_flag = show_docker.strip() == "1"
+    docker_count = sum(1 for c in all_candidates if _is_docker_candidate(c))
+    candidates = all_candidates if show_docker_flag else [c for c in all_candidates if not _is_docker_candidate(c)]
     events = list_discovery_events(selected_run_id, limit=30) if selected_run_id else []
     mac_map: dict[str, tuple[str, str]] = {}
     for host in list_hosts():
@@ -1960,6 +2019,14 @@ def discovery_page(request: Request, run_id: str = ""):
     </table></figure>
     <h2>{t("heading_discovery_candidates")}</h2>
     {bulk_form}
+    <p style="margin-bottom:.5rem;font-size:.875rem;">
+      {"" if not docker_count else (
+        f'<a href="{_with_lang(f"/admin/ui/discovery?run_id={_esc(selected_run_id)}", _lang(request))}">'
+        f"Show real devices only</a>" if show_docker_flag else
+        f'<a href="{_with_lang(f"/admin/ui/discovery?run_id={_esc(selected_run_id)}&show_docker=1", _lang(request))}">'
+        f"Show all ({docker_count} Docker containers hidden)</a>"
+      )}
+    </p>
     <figure><table>
       <thead><tr><th>{t("col_id")}</th><th>{t("col_name")}</th><th>{t("col_mac")}</th><th>{t("col_ipv4")}</th><th>{t("col_wol_confidence")}</th><th>{t("col_source_network")}</th><th>{t("col_imported_host")}</th><th>{t("col_suggested_host")}</th><th>{t("col_actions")}</th></tr></thead>
       <tbody>{''.join(candidate_rows)}</tbody>
