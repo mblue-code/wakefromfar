@@ -16,8 +16,12 @@
     <string name="action_use_regular_login">Use regular login instead</string>
     <string name="label_username">Username</string>
     <string name="label_password">Password</string>
+    <string name="action_show_password">Show password</string>
+    <string name="action_hide_password">Hide password</string>
     <string name="button_login">Login</string>
-    <string name="text_no_assigned_devices">No assigned devices.</string>
+    <string name="login_subtitle">Remote wake for your machines</string>
+    <string name="text_no_assigned_devices">No devices assigned</string>
+    <string name="text_no_devices_hint">Check with your admin</string>
     <string name="label_mac">MAC: %1$s</string>
     <string name="label_state">State: %1$s</string>
     <string name="state_on">on</string>
@@ -26,6 +30,7 @@
     <string name="label_last_checked">Last checked: %1$s%2$s</string>
     <string name="last_checked_never">never</string>
     <string name="last_checked_stale_suffix"> (stale)</string>
+    <string name="content_desc_stale_status">Status information may be stale</string>
     <string name="button_wake">Wake</string>
     <string name="info_invite_link_detected">Invite link detected. Set a password and activate your account.</string>
     <string name="error_login_required_fields">Backend URL, username, and password are required.</string>
