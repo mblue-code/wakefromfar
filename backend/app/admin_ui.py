@@ -183,6 +183,10 @@ _I18N = {
         "action_create_invite": "Create Invite",
         "action_revoke": "Revoke",
         "action_filter": "Filter",
+        "confirm_delete_user": "Delete user '{username}'?",
+        "confirm_delete_device": "Delete device '{device}'?",
+        "confirm_remove_assignment": "Remove this assignment?",
+        "confirm_revoke_invite": "Revoke this invite?",
         "label_token": "Token",
         "label_link": "Link",
         "alt_invite_qr_code": "Invite QR Code",
@@ -350,6 +354,10 @@ _I18N = {
         "action_create_invite": "Einladung erstellen",
         "action_revoke": "Widerrufen",
         "action_filter": "Filtern",
+        "confirm_delete_user": "Benutzer '{username}' loschen?",
+        "confirm_delete_device": "Gerat '{device}' loschen?",
+        "confirm_remove_assignment": "Diese Zuweisung entfernen?",
+        "confirm_revoke_invite": "Diese Einladung widerrufen?",
         "label_token": "Token",
         "label_link": "Link",
         "alt_invite_qr_code": "Einladungs-QR-Code",
@@ -440,6 +448,20 @@ def _esc(value: object | None) -> str:
     if value is None:
         return ""
     return html.escape(str(value))
+
+
+_BADGE_COLORS = {
+    "sent": "#2d8a4e", "failed": "#c0392b",
+    "already_on": "#2980b9", "on": "#2d8a4e", "off": "#888",
+    "tcp": "#7d3c98", "icmp": "#1a6996",
+    "admin": "#d35400", "user": "#555",
+    "unknown": "#999",
+}
+
+
+def _badge(value: str) -> str:
+    color = _BADGE_COLORS.get(value.lower(), "#666")
+    return f'<span class="badge" style="background:{color}">{_esc(value)}</span>'
 
 
 def _safe_next_path(next_path: str | None) -> str:
@@ -548,41 +570,131 @@ def _require_admin_or_redirect(request: Request):
 def _layout(request: Request, title: str, body: str, admin_username: str, message: str | None = None, error: str | None = None) -> HTMLResponse:
     lang = _lang(request)
     t = lambda key, **kwargs: _tr(request, key, **kwargs)
-    notice = ""
+    flashes = ""
     if message:
-        notice = f'<div style="padding:10px;border:1px solid #5aa469;background:#edf9ef;margin-bottom:12px;">{_esc(message)}</div>'
+        flashes += f'<div class="flash flash-ok"><span>{_esc(message)}</span><button class="flash-close" aria-label="dismiss">×</button></div>'
     if error:
-        notice = f'{notice}<div style="padding:10px;border:1px solid #b74a4a;background:#fdeeee;margin-bottom:12px;">{_esc(error)}</div>'
-    nav = f"""
-    <nav style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px;">
-      <a href="{_with_lang('/admin/ui', lang)}">{t("nav_dashboard")}</a>
-      <a href="{_with_lang('/admin/ui/users', lang)}">{t("nav_users")}</a>
-      <a href="{_with_lang('/admin/ui/devices', lang)}">{t("nav_devices")}</a>
-      <a href="{_with_lang('/admin/ui/assignments', lang)}">{t("nav_assignments")}</a>
-      <a href="{_with_lang('/admin/ui/invites', lang)}">{t("nav_invites")}</a>
-      <a href="{_with_lang('/admin/ui/diagnostics', lang)}">{t("nav_diagnostics")}</a>
-      <a href="{_with_lang('/admin/ui/wake-logs', lang)}">{t("nav_wake_logs")}</a>
-      <a href="{_with_lang('/admin/ui/power-check-logs', lang)}">{t("nav_power_logs")}</a>
-      <a href="{_with_lang('/admin/ui/audit-logs', lang)}">{t("nav_audit_logs")}</a>
-      <a href="{_with_lang('/admin/ui/metrics', lang)}">{t("nav_metrics")}</a>
-      <a href="{_with_lang('/admin/ui/pilot-metrics', lang)}">{t("nav_pilot_metrics")}</a>
-      <a href="{_with_lang('/admin/ui/logout', lang)}">{t("nav_logout")}</a>
-    </nav>
-    """
+        flashes += f'<div class="flash flash-err"><span>{_esc(error)}</span><button class="flash-close" aria-label="dismiss">×</button></div>'
+    cur = request.url.path
+
+    def _nav(path: str, label: str) -> str:
+        exact = path == "/admin/ui"
+        is_active = (cur == path) if exact else (cur == path or cur.startswith(path + "/"))
+        cur_attr = ' aria-current="page"' if is_active else ""
+        return f'<a href="{_with_lang(path, lang)}"{cur_attr}>{label}</a>'
+
+    sidebar = f"""<aside class="sidebar">
+      <div class="sidebar-brand">WakeFromFar</div>
+      <nav>
+        {_nav('/admin/ui', t('nav_dashboard'))}
+        {_nav('/admin/ui/users', t('nav_users'))}
+        {_nav('/admin/ui/devices', t('nav_devices'))}
+        {_nav('/admin/ui/assignments', t('nav_assignments'))}
+        {_nav('/admin/ui/invites', t('nav_invites'))}
+        <div class="nav-sep"></div>
+        {_nav('/admin/ui/wake-logs', t('nav_wake_logs'))}
+        {_nav('/admin/ui/power-check-logs', t('nav_power_logs'))}
+        {_nav('/admin/ui/audit-logs', t('nav_audit_logs'))}
+        <div class="nav-sep"></div>
+        {_nav('/admin/ui/diagnostics', t('nav_diagnostics'))}
+        {_nav('/admin/ui/metrics', t('nav_metrics'))}
+        {_nav('/admin/ui/pilot-metrics', t('nav_pilot_metrics'))}
+      </nav>
+    </aside>"""
+
+    css = """
+:root{--sidebar-w:220px;--sidebar-bg:#1a1f2e;--sidebar-text:#b8c0d0;--sidebar-active:#fff;--sidebar-active-bg:rgba(255,255,255,.12);--topbar-h:56px}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;background:#f5f7fb;color:#1f2937;line-height:1.45}
+a{color:#1d4ed8}
+h1,h2,h3{margin:0 0 .8rem}
+h2{font-size:1.1rem}
+p{margin:.35rem 0 .75rem}
+article{background:#fff;border:1px solid #d7dce3;border-radius:10px;padding:1rem;margin:0 0 1rem}
+button,input,select{font:inherit}
+input,select{width:100%;max-width:100%;padding:.45rem .6rem;border:1px solid #cbd5e1;border-radius:8px;background:#fff;color:#111827}
+button{padding:.45rem .85rem;border:1px solid #0f172a;border-radius:8px;background:#0f172a;color:#fff;cursor:pointer}
+button:hover{filter:brightness(.95)}
+button.secondary{background:#fff;color:#334155;border-color:#94a3b8}
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,Liberation Mono,monospace;font-size:.85em;background:#f2f4f8;border:1px solid #d7dce3;border-radius:6px;padding:.1rem .3rem}
+table{width:100%;font-size:.875rem;border-collapse:collapse;background:#fff;border:1px solid #d7dce3}
+th,td{padding:.5rem .55rem;text-align:left;vertical-align:top;border-bottom:1px solid #e5e7eb}
+thead th{background:#f8fafc;font-weight:600}
+tr:last-child td{border-bottom:none}
+.admin-shell{display:grid;grid-template-columns:var(--sidebar-w) 1fr;min-height:100vh}
+.sidebar{background:var(--sidebar-bg);color:var(--sidebar-text);position:sticky;top:0;height:100vh;overflow-y:auto;display:flex;flex-direction:column}
+.sidebar-brand{padding:1rem 1.25rem;font-weight:700;font-size:1rem;color:#fff;letter-spacing:.02em;border-bottom:1px solid rgba(255,255,255,.08)}
+.sidebar nav{display:flex;flex-direction:column;padding:.5rem 0;flex:1}
+.sidebar nav a{display:block;padding:.5rem 1.25rem;color:var(--sidebar-text);text-decoration:none;font-size:.875rem;transition:background .15s,color .15s}
+.sidebar nav a:hover{background:rgba(255,255,255,.07);color:#fff}
+.sidebar nav a[aria-current="page"]{background:var(--sidebar-active-bg);color:var(--sidebar-active);font-weight:600}
+.nav-sep{height:1px;background:rgba(255,255,255,.08);margin:.4rem .75rem}
+.main-area{display:flex;flex-direction:column;min-height:100vh}
+.topbar{height:var(--topbar-h);display:flex;align-items:center;padding:0 1.5rem;gap:1rem;background:#fff;border-bottom:1px solid #d7dce3;position:sticky;top:0;z-index:10}
+.topbar-title{font-weight:600;font-size:1rem;flex:1}
+.topbar-right{display:flex;align-items:center;gap:1rem;flex-wrap:wrap}
+.topbar-user{font-size:.875rem;color:#64748b}
+.lang-switch{font-size:.8rem;color:#64748b}
+.lang-switch a{color:inherit}
+main.container-fluid{padding:1.5rem;flex:1}
+.flash{display:flex;align-items:center;justify-content:space-between;padding:.75rem 1rem;border-radius:8px;margin-bottom:1rem;font-size:.9rem}
+.flash-ok{background:#d1f0da;color:#1a5e2e;border:1px solid #a8ddb5}
+.flash-err{background:#fde8e8;color:#7b1a1a;border:1px solid #f5b7b7}
+.flash-close{background:none;border:none;font-size:1.2rem;cursor:pointer;color:inherit;padding:0 .25rem;line-height:1}
+.stat-cards{display:grid;grid-template-columns:repeat(4,1fr);gap:1rem;margin-bottom:1.5rem}
+.stat-card{text-align:center;padding:1.25rem}
+.stat-number{display:block;font-size:2rem;font-weight:700;line-height:1.1}
+.stat-label{display:block;font-size:.8rem;color:#64748b;margin-top:.25rem;text-transform:uppercase;letter-spacing:.05em}
+.badge{display:inline-block;padding:.2em .55em;border-radius:99px;font-size:.75rem;font-weight:600;color:#fff;white-space:nowrap}
+form{margin-bottom:0}
+figure{overflow-x:auto;margin:0 0 1rem}
+@media(max-width:768px){
+  .admin-shell{grid-template-columns:1fr}
+  .sidebar{position:static;height:auto}
+  .sidebar nav{flex-direction:row;flex-wrap:wrap;padding:.25rem}
+  .sidebar nav a{padding:.35rem .6rem;font-size:.8rem}
+  .stat-cards{grid-template-columns:repeat(2,1fr)}
+}"""
+
+    js = """document.querySelectorAll('form[data-confirm]').forEach(function(f){
+  f.addEventListener('submit',function(e){if(!confirm(f.dataset.confirm))e.preventDefault()});
+});
+document.querySelectorAll('.flash').forEach(function(el){
+  var btn=el.querySelector('.flash-close');
+  if(btn)btn.addEventListener('click',function(){el.remove()});
+  setTimeout(function(){if(el.parentNode)el.remove()},4000);
+});"""
+
     page = f"""<!doctype html>
-<html><head><meta charset="utf-8"><title>{_esc(title)}</title></head>
-<body style="font-family:ui-sans-serif,system-ui,sans-serif;max-width:1200px;margin:20px auto;padding:0 16px;">
-  <header style="display:flex;justify-content:space-between;align-items:center;">
-    <h1 style="margin:0 0 12px 0;">{_esc(title)}</h1>
-    <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
-      <div>{t("signed_in_as")} <strong>{_esc(admin_username)}</strong></div>
-      <div>{t("language")}: <a href="{_esc(_lang_switch_url(request, 'en'))}">{t("lang_en")}</a> | <a href="{_esc(_lang_switch_url(request, 'de'))}">{t("lang_de")}</a></div>
+<html data-theme="auto">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>{_esc(title)} — WakeFromFar Admin</title>
+  <style>{css}</style>
+</head>
+<body>
+  <div class="admin-shell">
+    {sidebar}
+    <div class="main-area">
+      <header class="topbar">
+        <span class="topbar-title">{_esc(title)}</span>
+        <div class="topbar-right">
+          <span class="topbar-user">{t("signed_in_as")} <strong>{_esc(admin_username)}</strong></span>
+          <span class="lang-switch"><a href="{_esc(_lang_switch_url(request, 'en'))}">{t("lang_en")}</a> | <a href="{_esc(_lang_switch_url(request, 'de'))}">{t("lang_de")}</a></span>
+          <a href="{_with_lang('/admin/ui/logout', lang)}">{t("nav_logout")}</a>
+        </div>
+      </header>
+      <main class="container-fluid">
+        {flashes}
+        {body}
+      </main>
     </div>
-  </header>
-  {nav}
-  {notice}
-  {body}
-</body></html>"""
+  </div>
+  <script>{js}</script>
+</body>
+</html>"""
     response = HTMLResponse(page)
     _apply_lang_cookie(request, response, lang)
     return response
@@ -615,20 +727,54 @@ def login_page(request: Request, next: str = "/admin/ui", error: str | None = No
     t = lambda key, **kwargs: _tr(request, key, **kwargs)
     if user:
         return RedirectResponse(safe_next, status_code=303)
+    error_html = f'<p class="login-error">{_esc(error)}</p>' if error else ""
     page = f"""<!doctype html>
-<html><head><meta charset="utf-8"><title>{t("title_admin_login")}</title></head>
-<body style="font-family:ui-sans-serif,system-ui,sans-serif;max-width:480px;margin:40px auto;padding:0 16px;">
-  <h1>{t("title_admin_login")}</h1>
-  <div style="margin-bottom:12px;">{t("language")}: <a href="{_esc(_lang_switch_url(request, 'en'))}">{t("lang_en")}</a> | <a href="{_esc(_lang_switch_url(request, 'de'))}">{t("lang_de")}</a></div>
-  {"<div style='padding:10px;border:1px solid #b74a4a;background:#fdeeee;margin-bottom:12px;'>" + _esc(error) + "</div>" if error else ""}
-  <form method="post" action="/admin/ui/login" style="display:grid;gap:10px;">
-    <input type="hidden" name="next" value="{_esc(safe_next)}" />
-    <input type="hidden" name="lang" value="{_esc(lang)}" />
-    <label>{t("label_username")} <input required name="username" /></label>
-    <label>{t("label_password")} <input required type="password" name="password" /></label>
-    <button type="submit">{t("action_login")}</button>
-  </form>
-</body></html>"""
+<html data-theme="auto">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>{t("title_admin_login")}</title>
+  <style>
+*{{box-sizing:border-box}}
+html,body{{margin:0;padding:0}}
+body{{display:flex;align-items:center;justify-content:center;min-height:100vh;padding:1rem;font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;background:#f5f7fb;color:#1f2937}}
+.login-card{{width:100%;max-width:380px}}
+.login-card{{background:#fff;border:1px solid #d7dce3;border-radius:12px;padding:1rem}}
+.login-brand{{text-align:center;margin-bottom:1.5rem}}
+.login-brand h1{{font-size:1.5rem;margin:0}}
+.login-brand p{{color:#64748b;font-size:.875rem;margin:.25rem 0 0}}
+.login-error{{color:#7b1a1a;background:#fde8e8;border:1px solid #f5b7b7;border-radius:8px;padding:.6rem .9rem;font-size:.875rem}}
+label{{display:block;margin:.45rem 0 .2rem}}
+input{{width:100%;max-width:100%;padding:.5rem .6rem;border:1px solid #cbd5e1;border-radius:8px;background:#fff;color:#111827}}
+button{{margin-top:.65rem;width:100%;padding:.5rem .85rem;border:1px solid #0f172a;border-radius:8px;background:#0f172a;color:#fff;cursor:pointer;font:inherit}}
+button:hover{{filter:brightness(.95)}}
+.lang-footer{{text-align:center;margin-top:1rem;font-size:.8rem;color:#64748b}}
+.lang-footer a{{color:inherit}}
+  </style>
+</head>
+<body>
+  <article class="login-card">
+    <div class="login-brand">
+      <h1>WakeFromFar</h1>
+      <p>{t("title_admin_login")}</p>
+    </div>
+    {error_html}
+    <form method="post" action="/admin/ui/login" autocomplete="off">
+      <input type="hidden" name="next" value="{_esc(safe_next)}" />
+      <input type="hidden" name="lang" value="{_esc(lang)}" />
+      <label for="login-username">{t("label_username")}</label>
+      <input id="login-username" required name="username" autocomplete="username" />
+      <label for="login-password">{t("label_password")}</label>
+      <input id="login-password" required type="password" name="password" autocomplete="current-password" />
+      <button type="submit">{t("action_login")}</button>
+    </form>
+    <div class="lang-footer">
+      <a href="{_esc(_lang_switch_url(request, 'en'))}">{t("lang_en")}</a> |
+      <a href="{_esc(_lang_switch_url(request, 'de'))}">{t("lang_de")}</a>
+    </div>
+  </article>
+</body>
+</html>"""
     response = HTMLResponse(page)
     _apply_lang_cookie(request, response, lang)
     return response
@@ -693,20 +839,22 @@ def dashboard(request: Request):
     power_logs = list_power_check_logs(limit=10)
     message, error = _msg(request)
     body = f"""
-    <section style="display:grid;grid-template-columns:repeat(4,minmax(120px,1fr));gap:12px;margin-bottom:16px;">
-      <div style="padding:12px;border:1px solid #ddd;"><div>{t("card_users")}</div><strong>{len(users)}</strong></div>
-      <div style="padding:12px;border:1px solid #ddd;"><div>{t("card_devices")}</div><strong>{len(devices)}</strong></div>
-      <div style="padding:12px;border:1px solid #ddd;"><div>{t("card_assignments")}</div><strong>{len(assignments)}</strong></div>
-      <div style="padding:12px;border:1px solid #ddd;"><div>{t("card_invites")}</div><strong>{len(list_invite_tokens(limit=500))}</strong></div>
-    </section>
+    <div class="stat-cards">
+      <article class="stat-card"><strong class="stat-number">{len(users)}</strong><span class="stat-label">{t("card_users")}</span></article>
+      <article class="stat-card"><strong class="stat-number">{len(devices)}</strong><span class="stat-label">{t("card_devices")}</span></article>
+      <article class="stat-card"><strong class="stat-number">{len(assignments)}</strong><span class="stat-label">{t("card_assignments")}</span></article>
+      <article class="stat-card"><strong class="stat-number">{len(list_invite_tokens(limit=500))}</strong><span class="stat-label">{t("card_invites")}</span></article>
+    </div>
     <h2>{t("heading_recent_wake_logs")}</h2>
-    <table border="1" cellpadding="6" cellspacing="0"><tr><th>{t("col_id")}</th><th>{t("col_device")}</th><th>{t("col_actor")}</th><th>{t("col_result")}</th><th>{t("col_time")}</th></tr>
-      {"".join(f"<tr><td>{row['id']}</td><td>{_esc(row['host_id'])}</td><td>{_esc(row['actor_username'])}</td><td>{_esc(row['result'])}</td><td>{_esc(row['created_at'])}</td></tr>" for row in wake_logs)}
-    </table>
+    <figure><table>
+      <thead><tr><th>{t("col_id")}</th><th>{t("col_device")}</th><th>{t("col_actor")}</th><th>{t("col_result")}</th><th>{t("col_time")}</th></tr></thead>
+      <tbody>{"".join(f"<tr><td>{row['id']}</td><td>{_esc(row['host_id'])}</td><td>{_esc(row['actor_username'])}</td><td>{_badge(str(row['result']))}</td><td>{_esc(row['created_at'])}</td></tr>" for row in wake_logs)}</tbody>
+    </table></figure>
     <h2>{t("heading_recent_power_checks")}</h2>
-    <table border="1" cellpadding="6" cellspacing="0"><tr><th>{t("col_id")}</th><th>{t("col_device")}</th><th>{t("col_method")}</th><th>{t("col_result")}</th><th>{t("col_time")}</th></tr>
-      {"".join(f"<tr><td>{row['id']}</td><td>{_esc(row['device_id'])}</td><td>{_esc(row['method'])}</td><td>{_esc(row['result'])}</td><td>{_esc(row['created_at'])}</td></tr>" for row in power_logs)}
-    </table>
+    <figure><table>
+      <thead><tr><th>{t("col_id")}</th><th>{t("col_device")}</th><th>{t("col_method")}</th><th>{t("col_result")}</th><th>{t("col_time")}</th></tr></thead>
+      <tbody>{"".join(f"<tr><td>{row['id']}</td><td>{_esc(row['device_id'])}</td><td>{_badge(str(row['method']))}</td><td>{_badge(str(row['result']))}</td><td>{_esc(row['created_at'])}</td></tr>" for row in power_logs)}</tbody>
+    </table></figure>
     """
     return _layout(request, t("title_admin_dashboard"), body, user["username"], message=message, error=error)
 
@@ -722,7 +870,7 @@ def users_page(request: Request):
     table_rows = "".join(
         f"""
         <tr>
-          <td>{row['id']}</td><td>{_esc(row['username'])}</td><td>{_esc(row['role'])}</td><td>{_esc(row['created_at'])}</td>
+          <td>{row['id']}</td><td>{_esc(row['username'])}</td><td>{_badge(str(row['role']))}</td><td>{_esc(row['created_at'])}</td>
           <td>
             <form method="post" action="/admin/ui/users/{row['id']}/update" style="display:flex;gap:6px;flex-wrap:wrap;">
               <select name="role">
@@ -734,8 +882,8 @@ def users_page(request: Request):
             </form>
           </td>
           <td>
-            <form method="post" action="/admin/ui/users/{row['id']}/delete">
-              <button type="submit">{t("action_delete")}</button>
+            <form method="post" action="/admin/ui/users/{row['id']}/delete" data-confirm="{_esc(t('confirm_delete_user', username=str(row['username'])))}">
+              <button type="submit" class="secondary">{t("action_delete")}</button>
             </form>
           </td>
         </tr>
@@ -744,17 +892,17 @@ def users_page(request: Request):
     )
     body = f"""
     <h2>{t("heading_create_user")}</h2>
-    <form method="post" action="/admin/ui/users/create" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px;">
+    <form method="post" action="/admin/ui/users/create" autocomplete="off" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:1.5rem;">
       <input required name="username" placeholder="{t("placeholder_username")}" />
       <input required name="password" type="password" placeholder="{t("placeholder_password_min12")}" />
       <select name="role"><option value="user">user</option><option value="admin">admin</option></select>
       <button type="submit">{t("action_create")}</button>
     </form>
     <h2>{t("heading_users")}</h2>
-    <table border="1" cellpadding="6" cellspacing="0">
-      <tr><th>{t("col_id")}</th><th>{t("col_username")}</th><th>{t("col_role")}</th><th>{t("col_created")}</th><th>{t("col_update")}</th><th>{t("col_delete")}</th></tr>
-      {table_rows}
-    </table>
+    <figure><table>
+      <thead><tr><th>{t("col_id")}</th><th>{t("col_username")}</th><th>{t("col_role")}</th><th>{t("col_created")}</th><th>{t("col_update")}</th><th>{t("col_delete")}</th></tr></thead>
+      <tbody>{table_rows}</tbody>
+    </table></figure>
     """
     return _layout(request, t("title_users"), body, user["username"], message=message, error=error)
 
@@ -864,8 +1012,8 @@ def devices_page(request: Request):
             </form>
           </td>
           <td>
-            <form method="post" action="/admin/ui/devices/{_esc(row['id'])}/test-power-check"><button type="submit">{t("action_test_power_check")}</button></form>
-            <form method="post" action="/admin/ui/devices/{_esc(row['id'])}/delete"><button type="submit">{t("action_delete")}</button></form>
+            <form method="post" action="/admin/ui/devices/{_esc(row['id'])}/test-power-check"><button type="submit" class="secondary">{t("action_test_power_check")}</button></form>
+            <form method="post" action="/admin/ui/devices/{_esc(row['id'])}/delete" data-confirm="{_esc(t('confirm_delete_device', device=str(row['name'])))}"><button type="submit" class="secondary">{t("action_delete")}</button></form>
           </td>
         </tr>
         """
@@ -873,7 +1021,7 @@ def devices_page(request: Request):
     )
     body = f"""
     <h2>{t("heading_create_device")}</h2>
-    <form method="post" action="/admin/ui/devices/create" style="display:grid;grid-template-columns:repeat(4,minmax(160px,1fr));gap:8px;margin-bottom:16px;">
+    <form method="post" action="/admin/ui/devices/create" autocomplete="off" style="display:grid;grid-template-columns:repeat(4,minmax(160px,1fr));gap:8px;margin-bottom:1.5rem;">
       <input required name="name" placeholder="{t("placeholder_name")}" />
       <input name="display_name" placeholder="{t("placeholder_display_name")}" />
       <input required name="mac" placeholder="AA:BB:CC:DD:EE:FF" />
@@ -889,10 +1037,10 @@ def devices_page(request: Request):
       <button type="submit">{t("action_create")}</button>
     </form>
     <h2>{t("heading_devices")}</h2>
-    <table border="1" cellpadding="6" cellspacing="0">
-      <tr><th>{t("col_id")}</th><th>{t("col_name")}</th><th>{t("col_display")}</th><th>{t("col_mac")}</th><th>{t("col_method")}</th><th>{t("col_target")}</th><th>{t("col_port")}</th><th>{t("col_state")}</th><th>{t("col_checked_at")}</th><th>{t("col_diagnostics")}</th><th>{t("col_update")}</th><th>{t("col_actions")}</th></tr>
-      {table_rows}
-    </table>
+    <figure><table>
+      <thead><tr><th>{t("col_id")}</th><th>{t("col_name")}</th><th>{t("col_display")}</th><th>{t("col_mac")}</th><th>{t("col_method")}</th><th>{t("col_target")}</th><th>{t("col_port")}</th><th>{t("col_state")}</th><th>{t("col_checked_at")}</th><th>{t("col_diagnostics")}</th><th>{t("col_update")}</th><th>{t("col_actions")}</th></tr></thead>
+      <tbody>{table_rows}</tbody>
+    </table></figure>
     """
     return _layout(request, t("title_devices"), body, admin["username"], message=message, error=error)
 
@@ -1074,23 +1222,23 @@ def assignments_page(request: Request):
         f"""
         <tr>
           <td>{row['user_id']}</td><td>{_esc(row['username'])}</td><td>{_esc(row['device_id'])}</td><td>{_esc(row['device_name'])}</td><td>{_esc(row['created_at'])}</td>
-          <td><form method="post" action="/admin/ui/assignments/{row['user_id']}/{_esc(row['device_id'])}/delete"><button type="submit">{t("action_remove")}</button></form></td>
+          <td><form method="post" action="/admin/ui/assignments/{row['user_id']}/{_esc(row['device_id'])}/delete" data-confirm="{_esc(t('confirm_remove_assignment'))}"><button type="submit" class="secondary">{t("action_remove")}</button></form></td>
         </tr>
         """
         for row in assignments
     )
     body = f"""
     <h2>{t("heading_create_assignment")}</h2>
-    <form method="post" action="/admin/ui/assignments/create" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px;">
+    <form method="post" action="/admin/ui/assignments/create" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:1.5rem;">
       <select name="user_id">{user_opts}</select>
       <select name="device_id">{device_opts}</select>
       <button type="submit">{t("action_assign")}</button>
     </form>
     <h2>{t("heading_assignments")}</h2>
-    <table border="1" cellpadding="6" cellspacing="0">
-      <tr><th>{t("col_user_id")}</th><th>{t("col_username")}</th><th>{t("col_device_id")}</th><th>{t("col_device")}</th><th>{t("col_created")}</th><th>{t("col_action")}</th></tr>
-      {rows}
-    </table>
+    <figure><table>
+      <thead><tr><th>{t("col_user_id")}</th><th>{t("col_username")}</th><th>{t("col_device_id")}</th><th>{t("col_device")}</th><th>{t("col_created")}</th><th>{t("col_action")}</th></tr></thead>
+      <tbody>{rows}</tbody>
+    </table></figure>
     """
     return _layout(request, t("title_assignments"), body, admin["username"], message=message, error=error)
 
@@ -1149,7 +1297,7 @@ def _render_invites_page(
         <tr>
           <td>{_esc(row['id'])}</td><td>{_esc(row['username'])}</td><td>{_esc(row['backend_url_hint'])}</td>
           <td>{_esc(row['expires_at'])}</td><td>{_esc(row['claimed_at'])}</td><td>{_esc(row['created_by'])}</td>
-          <td><form method="post" action="/admin/ui/invites/{_esc(row['id'])}/revoke"><button type="submit">{t("action_revoke")}</button></form></td>
+          <td><form method="post" action="/admin/ui/invites/{_esc(row['id'])}/revoke" data-confirm="{_esc(t('confirm_revoke_invite'))}"><button type="submit" class="secondary">{t("action_revoke")}</button></form></td>
         </tr>
         """
         for row in invites
@@ -1158,29 +1306,29 @@ def _render_invites_page(
     if created_token and created_link:
         qr_url = f"https://quickchart.io/qr?size=240&text={quote_plus(created_link)}"
         created_section = f"""
-        <section style="padding:12px;border:1px solid #ddd;margin-bottom:16px;">
+        <article>
           <h3>{t("heading_new_invite")}</h3>
-          <div><strong>{t("label_token")}:</strong> <code>{_esc(created_token)}</code></div>
-          <div><strong>{t("label_link")}:</strong> <code>{_esc(created_link)}</code></div>
-          <div style="margin-top:8px;"><img src="{_esc(qr_url)}" alt="{t("alt_invite_qr_code")}" /></div>
-        </section>
+          <p><strong>{t("label_token")}:</strong> <code>{_esc(created_token)}</code></p>
+          <p><strong>{t("label_link")}:</strong> <code>{_esc(created_link)}</code></p>
+          <img src="{_esc(qr_url)}" alt="{t("alt_invite_qr_code")}" style="margin-top:.5rem" />
+        </article>
         """
     users = list_users()
     user_opts = "".join(f'<option value="{_esc(row["username"])}">{_esc(row["username"])}</option>' for row in users)
     body = f"""
     {created_section}
     <h2>{t("heading_create_invite")}</h2>
-    <form method="post" action="/admin/ui/invites/create" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px;">
+    <form method="post" action="/admin/ui/invites/create" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:1.5rem;">
       <select name="username">{user_opts}</select>
       <input name="backend_url_hint" placeholder="{t("placeholder_backend_url_hint_optional")}" />
       <input name="expires_in_hours" value="72" placeholder="{t("placeholder_hours")}" />
       <button type="submit">{t("action_create_invite")}</button>
     </form>
     <h2>{t("heading_invites")}</h2>
-    <table border="1" cellpadding="6" cellspacing="0">
-      <tr><th>{t("col_id")}</th><th>{t("col_username")}</th><th>{t("col_backend_hint")}</th><th>{t("col_expires_at")}</th><th>{t("col_claimed_at")}</th><th>{t("col_created_by")}</th><th>{t("col_action")}</th></tr>
-      {rows}
-    </table>
+    <figure><table>
+      <thead><tr><th>{t("col_id")}</th><th>{t("col_username")}</th><th>{t("col_backend_hint")}</th><th>{t("col_expires_at")}</th><th>{t("col_claimed_at")}</th><th>{t("col_created_by")}</th><th>{t("col_action")}</th></tr></thead>
+      <tbody>{rows}</tbody>
+    </table></figure>
     """
     return _layout(request, t("title_invites"), body, admin_username, message=message, error=error)
 
@@ -1281,12 +1429,12 @@ def wake_logs_page(
         rows = [row for row in rows if host_id.lower() in str(row["host_id"]).lower()]
     message, error = _msg(request)
     body_rows = "".join(
-        f"<tr><td>{row['id']}</td><td>{_esc(row['host_id'])}</td><td>{_esc(row['actor_username'])}</td><td>{_esc(row['result'])}</td><td>{_esc(row['precheck_state'])}</td><td>{_esc(row['error_detail'])}</td><td>{_esc(row['created_at'])}</td></tr>"
+        f"<tr><td>{row['id']}</td><td>{_esc(row['host_id'])}</td><td>{_esc(row['actor_username'])}</td><td>{_badge(str(row['result']))}</td><td>{_esc(row['precheck_state'])}</td><td>{_esc(row['error_detail'])}</td><td>{_esc(row['created_at'])}</td></tr>"
         for row in rows
     )
     body = f"""
     <h2>{t("heading_wake_logs")}</h2>
-    <form method="get" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
+    <form method="get" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:1rem;">
       <input name="host_id" value="{_esc(host_id)}" placeholder="{t("placeholder_host_id_filter")}" />
       <input name="actor" value="{_esc(actor)}" placeholder="{t("placeholder_actor_filter")}" />
       <select name="result">
@@ -1295,13 +1443,13 @@ def wake_logs_page(
         <option value="already_on" {"selected" if result=="already_on" else ""}>already_on</option>
         <option value="failed" {"selected" if result=="failed" else ""}>failed</option>
       </select>
-      <input name="limit" value="{limit}" />
+      <input name="limit" value="{limit}" style="width:80px" />
       <button type="submit">{t("action_filter")}</button>
     </form>
-    <table border="1" cellpadding="6" cellspacing="0">
-      <tr><th>{t("col_id")}</th><th>{t("col_host_id")}</th><th>{t("col_actor")}</th><th>{t("col_result")}</th><th>{t("col_precheck")}</th><th>{t("col_error")}</th><th>{t("col_created")}</th></tr>
-      {body_rows}
-    </table>
+    <figure><table>
+      <thead><tr><th>{t("col_id")}</th><th>{t("col_host_id")}</th><th>{t("col_actor")}</th><th>{t("col_result")}</th><th>{t("col_precheck")}</th><th>{t("col_error")}</th><th>{t("col_created")}</th></tr></thead>
+      <tbody>{body_rows}</tbody>
+    </table></figure>
     """
     return _layout(request, t("title_wake_logs"), body, admin["username"], message=message, error=error)
 
@@ -1328,12 +1476,12 @@ def power_logs_page(
         rows = [row for row in rows if device_id.lower() in str(row["device_id"]).lower()]
     message, error = _msg(request)
     body_rows = "".join(
-        f"<tr><td>{row['id']}</td><td>{_esc(row['device_id'])}</td><td>{_esc(row['method'])}</td><td>{_esc(row['result'])}</td><td>{_esc(row['detail'])}</td><td>{_esc(row['latency_ms'])}</td><td>{_esc(row['created_at'])}</td></tr>"
+        f"<tr><td>{row['id']}</td><td>{_esc(row['device_id'])}</td><td>{_badge(str(row['method']))}</td><td>{_badge(str(row['result']))}</td><td>{_esc(row['detail'])}</td><td>{_esc(row['latency_ms'])}</td><td>{_esc(row['created_at'])}</td></tr>"
         for row in rows
     )
     body = f"""
     <h2>{t("heading_power_check_logs")}</h2>
-    <form method="get" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
+    <form method="get" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:1rem;">
       <input name="device_id" value="{_esc(device_id)}" placeholder="{t("placeholder_device_id_filter")}" />
       <select name="method">
         <option value="" {"selected" if not method else ""}>{t("option_all_methods")}</option>
@@ -1346,13 +1494,13 @@ def power_logs_page(
         <option value="off" {"selected" if result=="off" else ""}>off</option>
         <option value="unknown" {"selected" if result=="unknown" else ""}>unknown</option>
       </select>
-      <input name="limit" value="{limit}" />
+      <input name="limit" value="{limit}" style="width:80px" />
       <button type="submit">{t("action_filter")}</button>
     </form>
-    <table border="1" cellpadding="6" cellspacing="0">
-      <tr><th>{t("col_id")}</th><th>{t("col_device_id")}</th><th>{t("col_method")}</th><th>{t("col_result")}</th><th>{t("col_detail")}</th><th>{t("col_latency_ms")}</th><th>{t("col_created")}</th></tr>
-      {body_rows}
-    </table>
+    <figure><table>
+      <thead><tr><th>{t("col_id")}</th><th>{t("col_device_id")}</th><th>{t("col_method")}</th><th>{t("col_result")}</th><th>{t("col_detail")}</th><th>{t("col_latency_ms")}</th><th>{t("col_created")}</th></tr></thead>
+      <tbody>{body_rows}</tbody>
+    </table></figure>
     """
     return _layout(request, t("title_power_check_logs"), body, admin["username"], message=message, error=error)
 
@@ -1387,15 +1535,15 @@ def diagnostics_page(request: Request):
     <h2>{t("heading_network_interfaces")}</h2>
     <p>{t("text_detected_networks")}: <strong>{_esc(networks)}</strong></p>
     <p>{t("text_multiple_networks_available")}: <strong>{t("value_yes") if network_diag["has_multiple_active_networks"] else t("value_no")}</strong></p>
-    <table border="1" cellpadding="6" cellspacing="0" style="margin-bottom:16px;">
-      <tr><th>{t("col_interface")}</th><th>{t("col_ipv4")}</th><th>{t("col_netmask")}</th><th>{t("col_network")}</th><th>{t("col_broadcast")}</th><th>{t("col_up")}</th><th>{t("col_loopback")}</th></tr>
-      {''.join(network_rows)}
-    </table>
+    <figure><table>
+      <thead><tr><th>{t("col_interface")}</th><th>{t("col_ipv4")}</th><th>{t("col_netmask")}</th><th>{t("col_network")}</th><th>{t("col_broadcast")}</th><th>{t("col_up")}</th><th>{t("col_loopback")}</th></tr></thead>
+      <tbody>{''.join(network_rows)}</tbody>
+    </table></figure>
     <h2>{t("heading_device_diagnostics_hints")}</h2>
-    <table border="1" cellpadding="6" cellspacing="0">
-      <tr><th>{t("col_device_id")}</th><th>{t("col_name")}</th><th>{t("col_hints")}</th></tr>
-      {''.join(rows)}
-    </table>
+    <figure><table>
+      <thead><tr><th>{t("col_device_id")}</th><th>{t("col_name")}</th><th>{t("col_hints")}</th></tr></thead>
+      <tbody>{''.join(rows)}</tbody>
+    </table></figure>
     """
     message, error = _msg(request)
     return _layout(request, t("title_diagnostics"), body, admin["username"], message=message, error=error)
@@ -1414,10 +1562,10 @@ def audit_logs_page(request: Request):
     )
     body = f"""
     <h2>{t("heading_admin_audit_logs")}</h2>
-    <table border="1" cellpadding="6" cellspacing="0">
-      <tr><th>{t("col_id")}</th><th>{t("col_actor")}</th><th>{t("col_action")}</th><th>{t("col_target_type")}</th><th>{t("col_target_id")}</th><th>{t("col_detail")}</th><th>{t("col_created")}</th></tr>
-      {body_rows}
-    </table>
+    <figure><table>
+      <thead><tr><th>{t("col_id")}</th><th>{t("col_actor")}</th><th>{t("col_action")}</th><th>{t("col_target_type")}</th><th>{t("col_target_id")}</th><th>{t("col_detail")}</th><th>{t("col_created")}</th></tr></thead>
+      <tbody>{body_rows}</tbody>
+    </table></figure>
     """
     message, error = _msg(request)
     return _layout(request, t("title_audit_logs"), body, admin["username"], message=message, error=error)
@@ -1435,10 +1583,10 @@ def metrics_page(request: Request):
     )
     body = f"""
     <h2>{t("heading_runtime_counters")}</h2>
-    <table border="1" cellpadding="6" cellspacing="0">
-      <tr><th>{t("col_counter")}</th><th>{t("col_value")}</th></tr>
-      {rows}
-    </table>
+    <figure><table>
+      <thead><tr><th>{t("col_counter")}</th><th>{t("col_value")}</th></tr></thead>
+      <tbody>{rows}</tbody>
+    </table></figure>
     """
     message, error = _msg(request)
     return _layout(request, t("title_metrics"), body, admin["username"], message=message, error=error)
@@ -1488,10 +1636,10 @@ def pilot_metrics_page(request: Request):
     <p>{t("text_total_claimed_users")}: <strong>{total_claimed}</strong></p>
     <p>{t("text_users_first_success_2m")}: <strong>{within_two_minutes}</strong></p>
     <p>{t("text_completion_rate_2m")}: <strong>{rate:.2%}</strong> ({t("text_target_90")})</p>
-    <table border="1" cellpadding="6" cellspacing="0">
-      <tr><th>{t("col_username")}</th><th>{t("col_claimed_at")}</th><th>{t("col_first_successful_wake")}</th><th>{t("col_seconds")}</th><th>{t("col_within_2m")}</th></tr>
-      {''.join(details_rows)}
-    </table>
+    <figure><table>
+      <thead><tr><th>{t("col_username")}</th><th>{t("col_claimed_at")}</th><th>{t("col_first_successful_wake")}</th><th>{t("col_seconds")}</th><th>{t("col_within_2m")}</th></tr></thead>
+      <tbody>{''.join(details_rows)}</tbody>
+    </table></figure>
     """
     message, error = _msg(request)
     return _layout(request, t("title_pilot_metrics"), body, admin["username"], message=message, error=error)
