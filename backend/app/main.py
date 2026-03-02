@@ -10,6 +10,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, status
+from fastapi.responses import RedirectResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from .admin_ui import router as admin_ui_router
@@ -173,6 +174,11 @@ async def app_lifespan(_app: FastAPI):
 
 app = FastAPI(title="WoL Relay", version="0.1.0", lifespan=app_lifespan)
 app.include_router(admin_ui_router)
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon_ico() -> RedirectResponse:
+    return RedirectResponse(url="/admin/ui/favicon.png", status_code=307)
 
 
 def _parse_ip(value: str | None) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:

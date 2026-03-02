@@ -14,6 +14,24 @@ def test_admin_ui_requires_login(client):
     assert response.headers["location"].startswith("/admin/ui/login")
 
 
+def test_admin_ui_exposes_favicon(client):
+    login_page = client.get("/admin/ui/login")
+    assert login_page.status_code == 200
+    assert 'rel="icon"' in login_page.text
+    assert 'href="/admin/ui/favicon.png"' in login_page.text
+
+    favicon = client.get("/admin/ui/favicon.png")
+    assert favicon.status_code == 200
+    assert favicon.headers.get("content-type", "").startswith("image/png")
+    assert len(favicon.content) > 0
+
+
+def test_root_favicon_redirects_to_admin_favicon(client):
+    response = client.get("/favicon.ico", follow_redirects=False)
+    assert response.status_code == 307
+    assert response.headers["location"] == "/admin/ui/favicon.png"
+
+
 def test_admin_ui_login_and_crud_paths(client):
     login_res = client.post(
         "/admin/ui/login",

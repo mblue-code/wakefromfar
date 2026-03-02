@@ -886,6 +886,11 @@ def _execute_discovery_run_ui(run_id: str) -> None:
         log_discovery_event(run_id=run_id, event_type="error", detail=str(exc))
 
 
+@router.get("/favicon.png", include_in_schema=False)
+def favicon():
+    return FileResponse(_FAVICON_PATH, media_type="image/png")
+
+
 def _candidate_default_name_ui(candidate: dict, prefix: str | None = None) -> str:
     base = str(candidate.get("hostname") or "").strip()
     if base:
