@@ -16,6 +16,9 @@
     <string name="action_use_regular_login">Use regular login instead</string>
     <string name="label_username">Username</string>
     <string name="label_password">Password</string>
+    <string name="label_language">Language</string>
+    <string name="language_english">English</string>
+    <string name="language_german">German</string>
     <string name="action_show_password">Show password</string>
     <string name="action_hide_password">Hide password</string>
     <string name="button_login">Login</string>

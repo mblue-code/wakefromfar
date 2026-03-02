@@ -14,10 +14,17 @@
     <string name="label_new_password">Neues Passwort</string>
     <string name="button_activate_account">Konto aktivieren</string>
     <string name="action_use_regular_login">Stattdessen normal anmelden</string>
-    <string name="label_username">Username</string>
+    <string name="label_username">Benutzername</string>
     <string name="label_password">Passwort</string>
+    <string name="label_language">Sprache</string>
+    <string name="language_english">Englisch</string>
+    <string name="language_german">Deutsch</string>
+    <string name="action_show_password">Passwort anzeigen</string>
+    <string name="action_hide_password">Passwort verbergen</string>
     <string name="button_login">Login</string>
+    <string name="login_subtitle">Remote-Aufwecken fuer deine Rechner</string>
     <string name="text_no_assigned_devices">Keine zugewiesenen Geraete.</string>
+    <string name="text_no_devices_hint">Bitte beim Admin nachfragen</string>
     <string name="label_mac">MAC: %1$s</string>
     <string name="label_state">Status: %1$s</string>
     <string name="state_on">an</string>
@@ -26,6 +33,7 @@
     <string name="label_last_checked">Zuletzt geprueft: %1$s%2$s</string>
     <string name="last_checked_never">nie</string>
     <string name="last_checked_stale_suffix"> (veraltet)</string>
+    <string name="content_desc_stale_status">Statusinformation kann veraltet sein</string>
     <string name="button_wake">Aufwecken</string>
     <string name="info_invite_link_detected">Invite-Link erkannt. Passwort setzen und Konto aktivieren.</string>
     <string name="error_login_required_fields">Backend URL, Username und Passwort sind Pflichtfelder.</string>

@@ -66,6 +66,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.wakefromfar.wolrelay.AppLanguage
 import com.wakefromfar.wolrelay.R
 import com.wakefromfar.wolrelay.data.MyDeviceDto
 import com.wakefromfar.wolrelay.data.ThemeMode
@@ -154,6 +155,8 @@ fun WolRelayApp(vm: MainViewModel) {
                 onBackendUrlChange = vm::updateBackendUrl,
                 onUsernameChange = vm::updateUsername,
                 onPasswordChange = vm::updatePassword,
+                currentLanguage = state.appLanguage,
+                onLanguageSelected = vm::updateAppLanguage,
                 onLogin = vm::login,
                 modifier = contentModifier,
             )
@@ -347,6 +350,8 @@ private fun LoginScreen(
     onBackendUrlChange: (String) -> Unit,
     onUsernameChange: (String) -> Unit,
     onPasswordChange: (String) -> Unit,
+    currentLanguage: AppLanguage,
+    onLanguageSelected: (AppLanguage) -> Unit,
     onLogin: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -389,6 +394,14 @@ private fun LoginScreen(
                 text = stringResource(R.string.login_subtitle),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            Spacer(modifier = Modifier.height(14.dp))
+
+            LanguageSelector(
+                currentLanguage = currentLanguage,
+                onLanguageSelected = onLanguageSelected,
+                modifier = Modifier.fillMaxWidth(),
             )
 
             Spacer(modifier = Modifier.height(24.dp))
@@ -446,6 +459,61 @@ private fun LoginScreen(
                     ) {
                         Text(stringResource(R.string.button_login))
                     }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun LanguageSelector(
+    currentLanguage: AppLanguage,
+    onLanguageSelected: (AppLanguage) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val currentLanguageLabel = when (currentLanguage) {
+        AppLanguage.ENGLISH -> stringResource(R.string.language_english)
+        AppLanguage.GERMAN -> stringResource(R.string.language_german)
+    }
+
+    Row(
+        modifier = modifier,
+        horizontalArrangement = Arrangement.End,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = stringResource(R.string.label_language),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        Box {
+            TextButton(onClick = { expanded = true }) {
+                Text(currentLanguageLabel)
+            }
+            DropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false },
+            ) {
+                AppLanguage.entries.forEach { language ->
+                    val languageLabelRes = when (language) {
+                        AppLanguage.ENGLISH -> R.string.language_english
+                        AppLanguage.GERMAN -> R.string.language_german
+                    }
+                    DropdownMenuItem(
+                        text = { Text(stringResource(languageLabelRes)) },
+                        leadingIcon = {
+                            RadioButton(
+                                selected = language == currentLanguage,
+                                onClick = null,
+                            )
+                        },
+                        onClick = {
+                            onLanguageSelected(language)
+                            expanded = false
+                        },
+                    )
                 }
             }
         }

@@ -9,6 +9,8 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.CreationExtras
 import androidx.lifecycle.viewModelScope
+import com.wakefromfar.wolrelay.AppLanguage
+import com.wakefromfar.wolrelay.LanguagePrefs
 import com.wakefromfar.wolrelay.R
 import com.wakefromfar.wolrelay.data.ApiClient
 import com.wakefromfar.wolrelay.data.ApiException
@@ -26,6 +28,7 @@ data class AppUiState(
     val claimPassword: String = "",
     val token: String? = null,
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
+    val appLanguage: AppLanguage = AppLanguage.ENGLISH,
     val devices: List<MyDeviceDto> = emptyList(),
     val isLoading: Boolean = false,
     val error: String? = null,
@@ -46,6 +49,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             backendUrl = prefs.getBackendUrl(),
             token = prefs.getToken(),
             themeMode = prefs.getThemeMode(),
+            appLanguage = LanguagePrefs.get(application),
         ),
     )
         private set
@@ -84,6 +88,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun updateThemeMode(mode: ThemeMode) {
         prefs.setThemeMode(mode)
         state = state.copy(themeMode = mode)
+    }
+
+    fun updateAppLanguage(language: AppLanguage) {
+        LanguagePrefs.set(getApplication(), language)
+        state = state.copy(appLanguage = language)
     }
 
     fun handleDeepLink(uriString: String?) {
