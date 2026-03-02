@@ -38,6 +38,11 @@ Production with global/distributed rate limits (shared Redis):
 docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.redis.yml up -d --build
 ```
 
+Homelab betatesting deployment behind Traefik:
+
+- Runbook: `docs/homelab-traefik-beta.md`
+- Helper script: `./scripts/deploy_beta.sh`
+
 Healthcheck:
 
 ```bash
@@ -106,15 +111,20 @@ curl -s http://localhost:8080/admin/hosts \
     "broadcast":"192.168.178.255",
     "source_ip":"192.168.178.2",
     "interface":"eth0",
-    "udp_port":9
+    "udp_port":9,
+    "check_method":"tcp",
+    "check_target":"192.168.178.50",
+    "check_port":80
   }'
 ```
+
+Power check fields (`check_method`, `check_target`, `check_port`) are required for the app to show whether a device is on or off. Only `tcp` is supported — set `check_target` to the device IP and `check_port` to any port that is open when the device is on (e.g. `80`, `443`, `445`, `22`). If left blank, power state will always show `unknown`.
 
 ### Alternativ per CLI
 
 ```bash
 docker compose exec wol-backend python -m app.cli add-user alice supersecret --role user
-docker compose exec wol-backend python -m app.cli add-host --name Proxmox --mac AA:BB:CC:DD:EE:FF --broadcast 192.168.178.255 --source-ip 192.168.178.2 --interface eth0
+docker compose exec wol-backend python -m app.cli add-host --name Proxmox --mac AA:BB:CC:DD:EE:FF --broadcast 192.168.178.255 --source-ip 192.168.178.2 --interface eth0 --check-method tcp --check-target 192.168.178.50 --check-port 80
 ```
 
 ## 3. API (MVP)

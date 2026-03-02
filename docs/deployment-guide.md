@@ -181,6 +181,34 @@ Validation:
 - Admin UI login works
 - IP allowlist behaves correctly for real client IPs (not proxy IP)
 
+### 5.5 Traefik (file provider) with host-network backend
+
+If backend runs with `network_mode: host`, route Traefik to the host endpoint instead of container labels.
+
+Example dynamic config file:
+
+```yaml
+http:
+  routers:
+    wakefromfar:
+      rule: "Host(`wakefromfar.example.com`)"
+      service: wakefromfar
+      entryPoints:
+        - websecure
+      tls:
+        certResolver: cloudflare
+  services:
+    wakefromfar:
+      loadBalancer:
+        servers:
+          - url: "http://172.18.0.1:8080"
+```
+
+Then set:
+
+- `TRUST_PROXY_HEADERS=true`
+- `TRUSTED_PROXY_CIDRS` to the Traefik network subnet(s), for example `172.18.0.0/16`
+
 ## 6. Non-Docker Deployment (No Reverse Proxy)
 
 ### 6.1 App setup
@@ -258,7 +286,12 @@ For each device:
 1. Determine target LAN and broadcast IP.
 2. Determine sender NIC IP in that LAN (`source_ip`).
 3. Optionally set interface name for additional routing control.
-4. Configure power check target/port (`check_target`, `check_port`).
+4. Configure power check fields — **required for power state to work**:
+   - `check_method`: must be `tcp` (ICMP is not implemented)
+   - `check_target`: IP or hostname of the device (usually the same as its LAN IP)
+   - `check_port`: any TCP port that is open and responsive when the device is on (e.g. `80`, `443`, `445`, `22`)
+   - If either `check_target` or `check_port` is left blank, power state will always show `unknown`
+   - To find open ports: `nmap -p 22,80,443,445 <device-ip>` or check the device's admin UI
 
 If WoL fails:
 
@@ -308,5 +341,5 @@ python3 backend/scripts/restore_db.py backups/<backup-file>.db --force
 - Docker daemon not running: start Docker engine/Desktop first.
 - Wrong proxy CIDR: backend ignores forwarded headers and sees proxy source IP only.
 - Wrong broadcast: packet sent successfully but target never wakes.
-- Missing check target/port: wake may send, but power state remains `unknown`.
+- Missing check target/port: if `check_target` or `check_port` is not set, power state always returns `unknown` — this is a configuration gap, not a connectivity failure. Set both fields on the device.
 - Non-host Docker network for backend: broadcast can be dropped or routed incorrectly.
