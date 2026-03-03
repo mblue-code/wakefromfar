@@ -30,6 +30,18 @@ class Settings(BaseSettings):
     login_rate_limit_per_minute: int = Field(default=5, alias="LOGIN_RATE_LIMIT_PER_MINUTE")
     onboarding_rate_limit_per_minute: int = Field(default=5, alias="ONBOARDING_RATE_LIMIT_PER_MINUTE")
     wake_rate_limit_per_minute: int = Field(default=20, alias="WAKE_RATE_LIMIT_PER_MINUTE")
+    shutdown_poke_request_rate_limit_per_minute: int = Field(
+        default=10,
+        alias="SHUTDOWN_POKE_REQUEST_RATE_LIMIT_PER_MINUTE",
+    )
+    shutdown_poke_seen_rate_limit_per_minute: int = Field(
+        default=30,
+        alias="SHUTDOWN_POKE_SEEN_RATE_LIMIT_PER_MINUTE",
+    )
+    shutdown_poke_resolve_rate_limit_per_minute: int = Field(
+        default=30,
+        alias="SHUTDOWN_POKE_RESOLVE_RATE_LIMIT_PER_MINUTE",
+    )
     rate_limit_backend: str = Field(default="memory", alias="RATE_LIMIT_BACKEND")
     rate_limit_redis_url: str = Field(default="redis://127.0.0.1:6379/0", alias="RATE_LIMIT_REDIS_URL")
 

@@ -7,9 +7,9 @@ import secrets
 import time
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
-from typing import Annotated
+from typing import Annotated, Literal
 
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, status
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request, status
 from fastapi.responses import RedirectResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
@@ -24,6 +24,8 @@ from .db import (
     create_host,
     create_discovery_candidate,
     create_discovery_run,
+    create_activity_event,
+    create_shutdown_poke_request,
     create_user,
     delete_host,
     delete_user,
@@ -34,6 +36,7 @@ from .db import (
     get_host_by_mac,
     get_host_by_id,
     get_invite_by_hash,
+    get_shutdown_poke_request,
     get_user_by_id,
     get_user_by_username,
     init_db,
@@ -43,6 +46,8 @@ from .db import (
     list_discovery_candidates,
     list_discovery_events,
     list_discovery_runs,
+    list_activity_events,
+    list_shutdown_poke_requests,
     list_hosts,
     list_invite_tokens,
     list_power_check_logs,
@@ -56,6 +61,8 @@ from .db import (
     log_wake,
     mark_discovery_candidate_imported,
     mark_discovery_run_running,
+    mark_shutdown_poke_resolved,
+    mark_shutdown_poke_seen,
     remove_assignment,
     revoke_invite,
     complete_discovery_run,
@@ -84,6 +91,7 @@ from .schemas import (
     AdminUserUpdate,
     AssignmentCreate,
     AssignmentOut,
+    ActivityEventOut,
     DiscoveryCandidateOut,
     DiscoveryBulkImportRequest,
     DiscoveryBulkImportResponse,
@@ -103,6 +111,8 @@ from .schemas import (
     OnboardingClaimRequest,
     OnboardingClaimResponse,
     PowerCheckResponse,
+    ShutdownPokeCreateRequest,
+    ShutdownPokeOut,
     WakeResponse,
 )
 from .security import create_token, decode_token, hash_password, verify_password
@@ -288,6 +298,111 @@ def require_admin(current_user: Annotated[dict, Depends(get_current_user)]) -> d
     if current_user["role"] != "admin":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin role required")
     return current_user
+
+
+_ACTIVITY_TYPE_FILTER_MAP: dict[str, tuple[str, ...]] = {
+    "wake": ("wake_sent", "wake_failed", "wake_already_on"),
+    "poke": ("shutdown_poke_requested", "shutdown_poke_seen", "shutdown_poke_resolved"),
+    "error": ("wake_failed",),
+}
+
+
+def _host_label(host_row: dict) -> str:
+    def _row_get(key: str):
+        if isinstance(host_row, dict):
+            return host_row.get(key)
+        try:
+            return host_row[key]  # type: ignore[index]
+        except Exception:
+            return None
+
+    display_name = str(_row_get("display_name") or "").strip()
+    if display_name:
+        return display_name
+    name = str(_row_get("name") or "").strip()
+    if name:
+        return name
+    return str(_row_get("id") or "device")
+
+
+def _emit_activity_event(
+    *,
+    event_type: str,
+    actor: dict | None,
+    target_type: str,
+    target_id: str | None,
+    server_id: str | None,
+    summary: str,
+    metadata: dict[str, object] | None = None,
+) -> None:
+    metadata_json = None
+    if metadata:
+        metadata_json = json.dumps(metadata, separators=(",", ":"))
+    create_activity_event(
+        event_type=event_type,
+        actor_user_id=actor["id"] if actor else None,
+        actor_username=actor["username"] if actor else None,
+        target_type=target_type,
+        target_id=target_id,
+        server_id=server_id,
+        summary=summary,
+        metadata_json=metadata_json,
+    )
+    increment_counter("activity_events.created")
+
+
+def _parse_activity_type_filters(raw: str | None) -> list[str] | None:
+    if not raw:
+        return None
+    tokens = [part.strip().lower() for part in raw.split(",") if part.strip()]
+    if not tokens or "all" in tokens:
+        return None
+    invalid = sorted({token for token in tokens if token not in _ACTIVITY_TYPE_FILTER_MAP})
+    if invalid:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported activity filter(s): {','.join(invalid)}",
+        )
+    event_types: set[str] = set()
+    for token in tokens:
+        event_types.update(_ACTIVITY_TYPE_FILTER_MAP[token])
+    return sorted(event_types)
+
+
+def _shutdown_poke_device_label(row: dict) -> str:
+    def _row_get(key: str):
+        if isinstance(row, dict):
+            return row.get(key)
+        try:
+            return row[key]  # type: ignore[index]
+        except Exception:
+            return None
+
+    display_name = str(_row_get("device_display_name") or "").strip()
+    if display_name:
+        return display_name
+    name = str(_row_get("device_name") or "").strip()
+    if name:
+        return name
+    return str(_row_get("server_id") or "device")
+
+
+def _shutdown_poke_to_out(row: dict) -> ShutdownPokeOut:
+    return ShutdownPokeOut(
+        id=row["id"],
+        server_id=row["server_id"],
+        device_name=row["device_name"],
+        device_display_name=row["device_display_name"],
+        requester_user_id=row["requester_user_id"],
+        requester_username=row["requester_username"],
+        message=row["message"],
+        status=row["status"],
+        created_at=row["created_at"],
+        seen_at=row["seen_at"],
+        resolved_at=row["resolved_at"],
+        resolved_by_user_id=row["resolved_by_user_id"],
+        resolved_by_username=row["resolved_by_username"],
+    )
 
 
 def _host_to_legacy_out(row: dict, is_stale: bool | None = None) -> HostOut:
@@ -813,7 +928,11 @@ def me_power_check(host_id: str, current_user: Annotated[dict, Depends(get_curre
 
 
 @app.post("/me/devices/{host_id}/wake", response_model=MeWakeResponse)
-def me_wake(host_id: str, request: Request, current_user: Annotated[dict, Depends(get_current_user)]) -> MeWakeResponse:
+def me_wake(
+    host_id: str,
+    request: Request,
+    current_user: Annotated[dict, Depends(get_current_user)],
+) -> MeWakeResponse:
     settings = get_settings()
     ip = _get_request_ip(request) or "unknown"
     rate_key = f"{current_user['username']}@{ip}"
@@ -824,6 +943,7 @@ def me_wake(host_id: str, request: Request, current_user: Annotated[dict, Depend
         "Too many wake attempts",
     )
     host = _get_authorized_host(current_user=current_user, host_id=host_id)
+    host_name = _host_label(host)
     precheck = _run_and_persist_power_check(host)
     now = datetime.now(UTC)
 
@@ -837,6 +957,18 @@ def me_wake(host_id: str, request: Request, current_user: Annotated[dict, Depend
         )
         increment_counter("wake.already_on")
         structured_log("wake.already_on", actor=current_user["username"], device_id=host_id, ip=ip)
+        _emit_activity_event(
+            event_type="wake_already_on",
+            actor=current_user,
+            target_type="device",
+            target_id=host_id,
+            server_id=host_id,
+            summary=f"{current_user['username']} woke {host_name} (already on)",
+            metadata={
+                "result": "already_on",
+                "precheck_state": "on",
+            },
+        )
         return MeWakeResponse(
             device_id=host_id,
             result="already_on",
@@ -874,6 +1006,20 @@ def me_wake(host_id: str, request: Request, current_user: Annotated[dict, Depend
             precheck_state=precheck.result,
             error=send_error,
         )
+        _emit_activity_event(
+            event_type="wake_failed",
+            actor=current_user,
+            target_type="device",
+            target_id=host_id,
+            server_id=host_id,
+            summary=f"{current_user['username']} failed to wake {host_name}",
+            metadata={
+                "result": "failed",
+                "precheck_state": precheck.result,
+                "sent_to": sent_to,
+                "error_detail": send_error or "",
+            },
+        )
         return MeWakeResponse(
             device_id=host_id,
             result="failed",
@@ -907,6 +1053,20 @@ def me_wake(host_id: str, request: Request, current_user: Annotated[dict, Depend
         precheck_state=precheck.result,
         precheck_detail=precheck.detail,
     )
+    _emit_activity_event(
+        event_type="wake_sent",
+        actor=current_user,
+        target_type="device",
+        target_id=host_id,
+        server_id=host_id,
+        summary=f"{current_user['username']} woke {host_name}",
+        metadata={
+            "result": "sent",
+            "precheck_state": precheck.result,
+            "precheck_detail": precheck.detail,
+            "sent_to": sent_to,
+        },
+    )
     return MeWakeResponse(
         device_id=host_id,
         result="sent",
@@ -915,6 +1075,164 @@ def me_wake(host_id: str, request: Request, current_user: Annotated[dict, Depend
         sent_to=sent_to,
         timestamp=now,
     )
+
+
+@app.post("/me/devices/{host_id}/shutdown-poke", status_code=status.HTTP_201_CREATED, response_model=ShutdownPokeOut)
+def me_shutdown_poke(
+    host_id: str,
+    request: Request,
+    current_user: Annotated[dict, Depends(get_current_user)],
+    body: ShutdownPokeCreateRequest | None = None,
+) -> ShutdownPokeOut:
+    settings = get_settings()
+    ip = _get_request_ip(request) or "unknown"
+    _enforce_rate_limit(
+        "shutdown_poke_request",
+        f"{current_user['username']}@{ip}",
+        settings.shutdown_poke_request_rate_limit_per_minute,
+        "Too many shutdown requests",
+    )
+    host = _get_authorized_host(current_user=current_user, host_id=host_id)
+    host_name = _host_label(host)
+    message = (body.message if body else None) or None
+    row = create_shutdown_poke_request(
+        server_id=host_id,
+        requester_user_id=int(current_user["id"]),
+        requester_username=str(current_user["username"]),
+        message=message,
+    )
+    poke_id = str(row["id"])
+    _emit_activity_event(
+        event_type="shutdown_poke_requested",
+        actor=current_user,
+        target_type="request",
+        target_id=poke_id,
+        server_id=host_id,
+        summary=f"{current_user['username']} requested shutdown for {host_name}",
+        metadata={
+            "status": "open",
+            "poke_id": poke_id,
+            "message": str(row["message"] or ""),
+        },
+    )
+    increment_counter("shutdown_poke.requested")
+    increment_counter("shutdown_pokes.open")
+    structured_log(
+        "shutdown_poke.requested",
+        actor=current_user["username"],
+        poke_id=poke_id,
+        device_id=host_id,
+    )
+    return _shutdown_poke_to_out(row)
+
+
+@app.get("/admin/shutdown-pokes", response_model=list[ShutdownPokeOut])
+def admin_list_shutdown_pokes(
+    _: Annotated[dict, Depends(require_admin)],
+    status_filter: Annotated[Literal["open", "seen", "resolved"] | None, Query(alias="status")] = None,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+) -> list[ShutdownPokeOut]:
+    rows = list_shutdown_poke_requests(status_filter=status_filter, limit=limit)
+    return [_shutdown_poke_to_out(row) for row in rows]
+
+
+@app.post("/admin/shutdown-pokes/{poke_id}/seen", response_model=ShutdownPokeOut)
+def admin_mark_shutdown_poke_seen(
+    poke_id: str,
+    request: Request,
+    current_user: Annotated[dict, Depends(require_admin)],
+) -> ShutdownPokeOut:
+    settings = get_settings()
+    ip = _get_request_ip(request) or "unknown"
+    _enforce_rate_limit(
+        "shutdown_poke_seen",
+        f"{current_user['username']}@{ip}",
+        settings.shutdown_poke_seen_rate_limit_per_minute,
+        "Too many shutdown seen updates",
+    )
+    row = get_shutdown_poke_request(poke_id)
+    if not row:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Shutdown poke not found")
+    if row["status"] == "open":
+        updated = mark_shutdown_poke_seen(poke_id=poke_id)
+        if not updated:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Shutdown poke not found")
+        row = updated
+        device_label = _shutdown_poke_device_label(row)
+        _emit_activity_event(
+            event_type="shutdown_poke_seen",
+            actor=current_user,
+            target_type="request",
+            target_id=poke_id,
+            server_id=row["server_id"],
+            summary=f"{current_user['username']} marked shutdown request for {device_label} as seen",
+            metadata={"status": "seen", "poke_id": poke_id},
+        )
+        log_admin_action(
+            actor_username=current_user["username"],
+            action="seen_shutdown_poke",
+            target_type="shutdown_poke",
+            target_id=poke_id,
+            detail=f"server_id={row['server_id']}",
+        )
+        increment_counter("shutdown_poke.seen")
+        structured_log(
+            "shutdown_poke.seen",
+            actor=current_user["username"],
+            poke_id=poke_id,
+            device_id=row["server_id"],
+        )
+    return _shutdown_poke_to_out(row)
+
+
+@app.post("/admin/shutdown-pokes/{poke_id}/resolve", response_model=ShutdownPokeOut)
+def admin_mark_shutdown_poke_resolved(
+    poke_id: str,
+    request: Request,
+    current_user: Annotated[dict, Depends(require_admin)],
+) -> ShutdownPokeOut:
+    settings = get_settings()
+    ip = _get_request_ip(request) or "unknown"
+    _enforce_rate_limit(
+        "shutdown_poke_resolve",
+        f"{current_user['username']}@{ip}",
+        settings.shutdown_poke_resolve_rate_limit_per_minute,
+        "Too many shutdown resolve updates",
+    )
+    row = get_shutdown_poke_request(poke_id)
+    if not row:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Shutdown poke not found")
+    if row["status"] != "resolved":
+        updated = mark_shutdown_poke_resolved(poke_id=poke_id, actor_user_id=int(current_user["id"]))
+        if not updated:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Shutdown poke not found")
+        row = updated
+        device_label = _shutdown_poke_device_label(row)
+        _emit_activity_event(
+            event_type="shutdown_poke_resolved",
+            actor=current_user,
+            target_type="request",
+            target_id=poke_id,
+            server_id=row["server_id"],
+            summary=f"{current_user['username']} resolved shutdown request for {device_label}",
+            metadata={"status": "resolved", "poke_id": poke_id},
+        )
+        log_admin_action(
+            actor_username=current_user["username"],
+            action="resolve_shutdown_poke",
+            target_type="shutdown_poke",
+            target_id=poke_id,
+            detail=f"server_id={row['server_id']}",
+        )
+        increment_counter("shutdown_poke.resolved")
+        increment_counter("shutdown_pokes.resolved")
+        structured_log(
+            "shutdown_poke.resolved",
+            actor=current_user["username"],
+            poke_id=poke_id,
+            device_id=row["server_id"],
+        )
+    return _shutdown_poke_to_out(row)
 
 
 @app.get("/admin/users", response_model=list[AdminUserOut])
@@ -1275,6 +1593,44 @@ def admin_revoke_invite(
     )
     increment_counter("admin_action.revoke_invite")
     return {"ok": True}
+
+
+@app.get("/admin/mobile/events", response_model=list[ActivityEventOut])
+def admin_mobile_events(
+    _: Annotated[dict, Depends(require_admin)],
+    cursor: Annotated[int | None, Query(ge=1)] = None,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    type_filter: Annotated[str | None, Query(alias="type")] = None,
+) -> list[ActivityEventOut]:
+    increment_counter("activity_feed.poll_requests")
+    event_types = _parse_activity_type_filters(type_filter)
+    try:
+        rows = list_activity_events(limit=limit, cursor_id=cursor, event_types=event_types)
+    except Exception as exc:
+        increment_counter("activity_feed.poll_errors")
+        structured_log(
+            "activity_feed.poll_error",
+            error=str(exc),
+            cursor=cursor,
+            limit=limit,
+            type_filter=type_filter or "",
+        )
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Could not load activity events")
+    return [
+        ActivityEventOut(
+            id=row["id"],
+            event_type=row["event_type"],
+            actor_user_id=row["actor_user_id"],
+            actor_username=row["actor_username"],
+            target_type=row["target_type"],
+            target_id=row["target_id"],
+            server_id=row["server_id"],
+            summary=row["summary"],
+            metadata=_parse_json_dict(row["metadata_json"]) if row["metadata_json"] else None,
+            created_at=row["created_at"],
+        )
+        for row in rows
+    ]
 
 
 @app.get("/admin/wake-logs")

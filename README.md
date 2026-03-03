@@ -64,6 +64,16 @@ curl http://localhost:8080/health
 - Für Containerbetrieb bevorzugt `source_ip` setzen (IP der passenden Host-NIC), da das stabil ohne zusätzliche Container-Caps funktioniert.
 - Hinter Reverse Proxy `TRUST_PROXY_HEADERS=true` und `TRUSTED_PROXY_CIDRS` auf die Proxy-IP/Netze setzen, damit Allowlist + Rate Limits die echte Client-IP nutzen.
 - Für mehrere Backend-Instanzen `RATE_LIMIT_BACKEND=redis` setzen und eine gemeinsame Redis-Instanz über `RATE_LIMIT_REDIS_URL` verwenden.
+- Sprint-4 Rate-Limits (per minute) are configurable via:
+  - `SHUTDOWN_POKE_REQUEST_RATE_LIMIT_PER_MINUTE`
+  - `SHUTDOWN_POKE_SEEN_RATE_LIMIT_PER_MINUTE`
+  - `SHUTDOWN_POKE_RESOLVE_RATE_LIMIT_PER_MINUTE`
+
+### Admin Activity Notifications (Backend-only)
+
+- Android admin app reads compact wake activity from `GET /admin/mobile/events`.
+- No Firebase setup is required for this flow.
+- If the admin app is offline, events are shown (and surfaced as in-app notices) on next online refresh.
 
 ## 2. Admin Bootstrap und Datenpflege
 
@@ -104,6 +114,25 @@ Runbook/Release-Checklist:
 - `docs/sprint3-runbook-checklist.md`
 - `docs/deployment-guide.md` (Docker/non-Docker, with/without reverse proxy, multi-NIC WoL)
 - `docs/release-gates.md` (strict pre-testing and pre-production gates)
+
+### Hardening / Sprint 4
+
+Metrics counters expected in `/admin/metrics`:
+
+- `activity_events.created`
+- `activity_feed.poll_requests`
+- `activity_feed.poll_errors`
+- `shutdown_pokes.open`
+- `shutdown_pokes.resolved`
+
+Shutdown poke verification flow:
+
+1. Assigned user/admin calls `POST /me/devices/{id}/shutdown-poke` (expect `201`, `status=open`).
+2. Admin sees item in `GET /admin/shutdown-pokes?status=open`.
+3. Admin marks `POST /admin/shutdown-pokes/{id}/seen` (expect `200`, `status=seen`).
+4. Admin marks `POST /admin/shutdown-pokes/{id}/resolve` (expect `200`, `status=resolved`).
+5. Verify activity feed `GET /admin/mobile/events?type=poke&limit=20` contains requested/seen/resolved events for the poke id.
+6. Verify `/admin/metrics` increments `shutdown_pokes.open`, `shutdown_pokes.resolved`, and `activity_events.created`.
 ### Host per Admin API anlegen
 
 ```bash
@@ -143,12 +172,15 @@ docker compose exec wol-backend python -m app.cli add-host --name Proxmox --mac 
 - `GET /me/devices` (auth)
 - `POST /me/devices/{id}/wake` (auth)
 - `POST /me/devices/{id}/power-check` (auth)
+- `POST /me/devices/{id}/shutdown-poke` (auth; assigned user/admin)
 - `POST /admin/users` (admin)
 - `GET/POST/PATCH/DELETE /admin/users` (admin)
 - `GET/POST/PATCH/DELETE /admin/devices` (admin)
 - `GET/POST/DELETE /admin/assignments` (admin)
 - `GET/POST /admin/invites` + `POST /admin/invites/{id}/revoke` (admin)
 - `GET /admin/wake-logs`, `GET /admin/power-check-logs` (admin)
+- `GET /admin/mobile/events` (admin, compact mobile activity feed with optional `cursor`, `limit`, `type`)
+- `GET /admin/shutdown-pokes`, `POST /admin/shutdown-pokes/{id}/seen`, `POST /admin/shutdown-pokes/{id}/resolve` (admin)
 - `GET /admin/discovery/networks`, `GET/POST /admin/discovery/runs` (admin)
 - `GET /admin/discovery/runs/{id}`, `GET /admin/discovery/runs/{id}/candidates` (admin)
 - `POST /admin/discovery/runs/{id}/import-bulk` (admin)
@@ -176,6 +208,17 @@ Sprint-2 Features:
 - Token + URL in `EncryptedSharedPreferences`
 - "My Devices" (`/me/devices`) mit Power-State Badge
 - Wake mit `already_on`/`sent`/`failed` Messaging
+- Admin activity polling (`/admin/mobile/events`) with in-app new-event notices
+- Shutdown poke flow (`/me/devices/{id}/shutdown-poke`) with optional note
+- Admin activity actions for shutdown pokes (`seen` / `resolved`)
+- Activity feed pagination (cursor-based load more against `/admin/mobile/events`)
+- Lifecycle-safe polling for admin activity (foreground start, background stop, single loop, silent transient poll failures)
+
+Sprint-1 Admin-App Additions:
+
+- Admin role detection in Android from JWT role claim.
+- Admin tabbed home: `Devices` + `Activity`.
+- Activity tab reads compact backend feed from `GET /admin/mobile/events` (wake + shutdown poke events).
 
 Hinweis:
 
@@ -186,6 +229,8 @@ Hinweis:
   - `WFF_RELEASE_STORE_PASSWORD`
   - `WFF_RELEASE_KEY_ALIAS`
   - `WFF_RELEASE_KEY_PASSWORD`
+
+Hinweis: Admin event notifications are backend-driven in-app messages; there is no Firebase dependency in the Android client.
 
 ## 5. Backup und Restore (SQLite)
 
@@ -210,3 +255,39 @@ source .venv/bin/activate
 pip install -r requirements.txt
 APP_SECRET=dev-secret-please-change ADMIN_USER=admin ADMIN_PASS=admin123456 uvicorn app.main:app --reload --port 8080
 ```
+
+## 7. Sprint-1 Local Verification (Admin Activity Feed)
+
+Backend tests for the new mobile admin feed:
+
+```bash
+cd backend
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements-dev.txt
+pytest -q tests/test_admin_mobile_events.py
+```
+
+Manual API check after a wake event:
+
+```bash
+# as admin
+curl -s "http://localhost:8080/admin/mobile/events?type=wake&limit=20" \
+  -H "authorization: Bearer $TOKEN"
+```
+
+Pagination + filtering examples:
+
+```bash
+# fetch older rows
+curl -s "http://localhost:8080/admin/mobile/events?type=wake&limit=20&cursor=123"
+
+# currently supported filter groups: wake, poke, error, all
+curl -s "http://localhost:8080/admin/mobile/events?type=error"
+```
+
+Android activity feed behavior:
+
+- Initial admin activity fetch loads the newest page and stores the cursor from the last item.
+- “Load more” requests older rows using `cursor=<last_id>` and appends unique items.
+- Polling runs every 30s only while app is in foreground (`STARTED` lifecycle), and stops on background.

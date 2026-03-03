@@ -13,17 +13,42 @@ This checklist is the final gate before promoting builds.
    pytest -q
    ```
 2. Android CI jobs pass (`testDebugUnitTest`, `lintDebug`, `assembleRelease`).
-3. Environment file is prepared from `.env.example` and secrets are replaced:
+3. Android admin activity feed prerequisites are present:
+   - Admin login on Android opens `Devices` + `Activity` tabs
+   - `GET /admin/mobile/events` succeeds for admin session
+   - Android device card allows `Request shutdown` with optional note
+4. Environment file is prepared from `.env.example` and secrets are replaced:
    - `APP_SECRET`
    - `ADMIN_PASS`
-4. Compose target is explicit:
+   - Shutdown poke rate-limit knobs are set for the environment profile:
+     - `SHUTDOWN_POKE_REQUEST_RATE_LIMIT_PER_MINUTE`
+     - `SHUTDOWN_POKE_SEEN_RATE_LIMIT_PER_MINUTE`
+     - `SHUTDOWN_POKE_RESOLVE_RATE_LIMIT_PER_MINUTE`
+5. Compose target is explicit:
    - testing: `docker compose -f docker-compose.yml -f docker-compose.testing.yml up -d --build`
-5. Smoke test succeeds:
+6. Smoke test succeeds:
    - `/health`
    - admin login
    - invite claim
    - `/me/devices`
    - wake path (`already_on` and `sent`)
+   - shutdown poke path:
+     - `POST /me/devices/{id}/shutdown-poke` returns 201 for assigned user/admin
+     - `GET /admin/shutdown-pokes?status=open` returns 200 for admin
+     - `POST /admin/shutdown-pokes/{id}/seen` then `.../resolve` return 200 for admin
+     - poke endpoint limits return 429 when limit is exceeded (request/seen/resolve)
+     - admin shutdown-poke endpoints return 403 for non-admin token
+   - admin mobile activity feed:
+     - `GET /admin/mobile/events?type=wake&limit=20` returns 200 for admin
+     - `GET /admin/mobile/events?type=poke&limit=20` returns 200 for admin
+     - pagination works with `cursor=<last_id>` and returns older ids only
+     - same endpoint returns 403 for non-admin user token
+   - metrics counters in `/admin/metrics` increase for:
+     - `activity_events.created`
+     - `activity_feed.poll_requests`
+     - `activity_feed.poll_errors` (trigger at least one forced failure in staging)
+     - `shutdown_pokes.open`
+     - `shutdown_pokes.resolved`
 
 ## Gate 2: Before Production
 
@@ -46,6 +71,7 @@ This checklist is the final gate before promoting builds.
    - `/admin/metrics`
    - `/admin/diagnostics/devices`
    - `/admin/pilot-metrics`
+   - `/admin/metrics` includes Sprint-4 counters (`activity_events.created`, `activity_feed.*`, `shutdown_pokes.*`)
 5. Android release artifact is signed using release keystore env vars:
    - `WFF_RELEASE_STORE_FILE`
    - `WFF_RELEASE_STORE_PASSWORD`
@@ -59,3 +85,4 @@ This checklist is the final gate before promoting builds.
 
 - `RATE_LIMIT_BACKEND=memory` is valid for single-instance deployments.
 - Use shared Redis backend for global limits across multiple backend instances.
+- Admin mobile notifications remain backend-driven/in-app (no Firebase/FCM dependency).
