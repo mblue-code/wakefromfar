@@ -169,6 +169,39 @@ class MyDeviceOut(BaseModel):
     is_stale: bool
 
 
+class ActivityEventOut(BaseModel):
+    id: int
+    event_type: str
+    actor_user_id: int | None = None
+    actor_username: str | None = None
+    target_type: str
+    target_id: str | None = None
+    server_id: str | None = None
+    summary: str
+    metadata: dict[str, object] | None = None
+    created_at: datetime
+
+
+class ShutdownPokeCreateRequest(BaseModel):
+    message: str | None = Field(default=None, max_length=280)
+
+
+class ShutdownPokeOut(BaseModel):
+    id: str
+    server_id: str
+    device_name: str | None = None
+    device_display_name: str | None = None
+    requester_user_id: int
+    requester_username: str
+    message: str | None = None
+    status: Literal["open", "seen", "resolved"]
+    created_at: datetime
+    seen_at: datetime | None = None
+    resolved_at: datetime | None = None
+    resolved_by_user_id: int | None = None
+    resolved_by_username: str | None = None
+
+
 class PowerCheckResponse(BaseModel):
     device_id: str
     method: str

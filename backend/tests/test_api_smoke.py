@@ -95,6 +95,27 @@ def test_new_endpoints_smoke(client, monkeypatch):
     assert wake_res.status_code == 200, wake_res.text
     assert wake_res.json()["result"] == "sent"
 
+    poke_res = client.post(
+        f"/me/devices/{device_id}/shutdown-poke",
+        headers=user_h,
+        json={"message": "finished for now"},
+    )
+    assert poke_res.status_code == 201, poke_res.text
+    poke_id = poke_res.json()["id"]
+    assert poke_res.json()["status"] == "open"
+
+    open_pokes_res = client.get("/admin/shutdown-pokes?status=open", headers=admin_h)
+    assert open_pokes_res.status_code == 200, open_pokes_res.text
+    assert any(row["id"] == poke_id for row in open_pokes_res.json())
+
+    seen_res = client.post(f"/admin/shutdown-pokes/{poke_id}/seen", headers=admin_h)
+    assert seen_res.status_code == 200, seen_res.text
+    assert seen_res.json()["status"] == "seen"
+
+    resolved_res = client.post(f"/admin/shutdown-pokes/{poke_id}/resolve", headers=admin_h)
+    assert resolved_res.status_code == 200, resolved_res.text
+    assert resolved_res.json()["status"] == "resolved"
+
     wake_logs_res = client.get("/admin/wake-logs", headers=admin_h)
     assert wake_logs_res.status_code == 200, wake_logs_res.text
     assert any(row["host_id"] == device_id for row in wake_logs_res.json())

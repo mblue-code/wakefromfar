@@ -1,9 +1,9 @@
 package com.wakefromfar.wolrelay
 
 import android.os.Bundle
+import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.app.AppCompatDelegate
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.LaunchedEffect
@@ -17,7 +17,7 @@ import com.wakefromfar.wolrelay.ui.WolRelayApp
 import com.wakefromfar.wolrelay.ui.theme.WakeFromFarTheme
 import kotlinx.coroutines.flow.MutableStateFlow
 
-class MainActivity : AppCompatActivity() {
+class MainActivity : ComponentActivity() {
     private val pendingDeepLink = MutableStateFlow<String?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -47,7 +47,7 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             WakeFromFarTheme(darkTheme = darkTheme) {
-                WolRelayApp(vm)
+                WolRelayApp(vm = vm)
             }
         }
     }

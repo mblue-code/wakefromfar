@@ -26,6 +26,7 @@
                 <data android:scheme="wakefromfar" android:host="claim" />
             </intent-filter>
         </activity>
+
     </application>
 
 </manifest>

@@ -5,7 +5,7 @@ import uuid
 from contextlib import contextmanager
 from datetime import UTC, datetime
 import ipaddress
-from typing import Generator
+from typing import Generator, Literal
 
 from .config import get_settings
 
@@ -243,6 +243,53 @@ def _migration_005_discovery_schema(conn: sqlite3.Connection) -> None:
             )
 
 
+def _migration_006_activity_events(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS activity_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_type TEXT NOT NULL,
+            actor_user_id INTEGER,
+            actor_username TEXT,
+            target_type TEXT NOT NULL,
+            target_id TEXT,
+            server_id TEXT,
+            summary TEXT NOT NULL,
+            metadata_json TEXT,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(actor_user_id) REFERENCES users(id),
+            FOREIGN KEY(server_id) REFERENCES hosts(id)
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_activity_events_created_at ON activity_events(created_at DESC)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_activity_events_event_type_created_at ON activity_events(event_type, created_at DESC)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_activity_events_server_id_created_at ON activity_events(server_id, created_at DESC)")
+
+
+def _migration_007_shutdown_poke_requests(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS shutdown_poke_requests (
+            id TEXT PRIMARY KEY,
+            server_id TEXT NOT NULL,
+            requester_user_id INTEGER NOT NULL,
+            requester_username TEXT NOT NULL,
+            message TEXT,
+            status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open', 'seen', 'resolved')),
+            created_at TEXT NOT NULL,
+            seen_at TEXT,
+            resolved_at TEXT,
+            resolved_by_user_id INTEGER,
+            FOREIGN KEY(server_id) REFERENCES hosts(id),
+            FOREIGN KEY(requester_user_id) REFERENCES users(id),
+            FOREIGN KEY(resolved_by_user_id) REFERENCES users(id)
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_shutdown_poke_requests_status_created_at ON shutdown_poke_requests(status, created_at DESC)")
+
+
 def init_db() -> None:
     with get_conn() as conn:
         conn.execute(
@@ -263,6 +310,8 @@ def init_db() -> None:
             3: _migration_003_admin_audit,
             4: _migration_004_source_ip,
             5: _migration_005_discovery_schema,
+            6: _migration_006_activity_events,
+            7: _migration_007_shutdown_poke_requests,
         }
         for version in sorted(migrations.keys()):
             if version in applied:
@@ -812,6 +861,228 @@ def list_admin_audit_logs(limit: int = 200) -> list[sqlite3.Row]:
             (limit,),
         ).fetchall()
         return list(rows)
+
+
+def create_activity_event(
+    event_type: str,
+    target_type: str,
+    summary: str,
+    actor_user_id: int | None = None,
+    actor_username: str | None = None,
+    target_id: str | None = None,
+    server_id: str | None = None,
+    metadata_json: str | None = None,
+) -> int:
+    now = datetime.now(UTC).isoformat()
+    with get_conn() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO activity_events(
+                event_type,
+                actor_user_id,
+                actor_username,
+                target_type,
+                target_id,
+                server_id,
+                summary,
+                metadata_json,
+                created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                event_type,
+                actor_user_id,
+                actor_username,
+                target_type,
+                target_id,
+                server_id,
+                summary,
+                metadata_json,
+                now,
+            ),
+        )
+        return int(cur.lastrowid)
+
+
+def list_activity_events(
+    limit: int = 50,
+    cursor_id: int | None = None,
+    event_types: list[str] | None = None,
+) -> list[sqlite3.Row]:
+    safe_limit = max(1, min(limit, 200))
+    params: list[object] = []
+    where_clauses: list[str] = []
+    if cursor_id is not None:
+        where_clauses.append("id < ?")
+        params.append(cursor_id)
+    if event_types:
+        placeholders = ",".join("?" for _ in event_types)
+        where_clauses.append(f"event_type IN ({placeholders})")
+        params.extend(event_types)
+
+    query = """
+        SELECT id, event_type, actor_user_id, actor_username, target_type, target_id, server_id, summary, metadata_json, created_at
+        FROM activity_events
+    """
+    if where_clauses:
+        query += " WHERE " + " AND ".join(where_clauses)
+    query += " ORDER BY id DESC LIMIT ?"
+    params.append(safe_limit)
+
+    with get_conn() as conn:
+        rows = conn.execute(query, tuple(params)).fetchall()
+        return list(rows)
+
+
+def create_shutdown_poke_request(
+    *,
+    server_id: str,
+    requester_user_id: int,
+    requester_username: str,
+    message: str | None = None,
+) -> sqlite3.Row:
+    now = datetime.now(UTC).isoformat()
+    poke_id = str(uuid.uuid4())
+    normalized_message = (message or "").strip() or None
+    with get_conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO shutdown_poke_requests(
+                id,
+                server_id,
+                requester_user_id,
+                requester_username,
+                message,
+                status,
+                created_at,
+                seen_at,
+                resolved_at,
+                resolved_by_user_id
+            )
+            VALUES (?, ?, ?, ?, ?, 'open', ?, NULL, NULL, NULL)
+            """,
+            (poke_id, server_id, requester_user_id, requester_username, normalized_message, now),
+        )
+        row = conn.execute(
+            """
+            SELECT r.*, h.name AS device_name, h.display_name AS device_display_name, u.username AS resolved_by_username
+            FROM shutdown_poke_requests r
+            LEFT JOIN hosts h ON h.id = r.server_id
+            LEFT JOIN users u ON u.id = r.resolved_by_user_id
+            WHERE r.id = ?
+            """,
+            (poke_id,),
+        ).fetchone()
+        if row is None:
+            raise RuntimeError("shutdown poke request insert failed")
+        return row
+
+
+def get_shutdown_poke_request(poke_id: str) -> sqlite3.Row | None:
+    with get_conn() as conn:
+        return conn.execute(
+            """
+            SELECT r.*, h.name AS device_name, h.display_name AS device_display_name, u.username AS resolved_by_username
+            FROM shutdown_poke_requests r
+            LEFT JOIN hosts h ON h.id = r.server_id
+            LEFT JOIN users u ON u.id = r.resolved_by_user_id
+            WHERE r.id = ?
+            """,
+            (poke_id,),
+        ).fetchone()
+
+
+def list_shutdown_poke_requests(
+    *,
+    status_filter: Literal["open", "seen", "resolved"] | None = None,
+    limit: int = 50,
+) -> list[sqlite3.Row]:
+    safe_limit = max(1, min(limit, 200))
+    with get_conn() as conn:
+        if status_filter:
+            rows = conn.execute(
+                """
+                SELECT r.*, h.name AS device_name, h.display_name AS device_display_name, u.username AS resolved_by_username
+                FROM shutdown_poke_requests r
+                LEFT JOIN hosts h ON h.id = r.server_id
+                LEFT JOIN users u ON u.id = r.resolved_by_user_id
+                WHERE r.status = ?
+                ORDER BY r.created_at DESC
+                LIMIT ?
+                """,
+                (status_filter, safe_limit),
+            ).fetchall()
+            return list(rows)
+        rows = conn.execute(
+            """
+            SELECT r.*, h.name AS device_name, h.display_name AS device_display_name, u.username AS resolved_by_username
+            FROM shutdown_poke_requests r
+            LEFT JOIN hosts h ON h.id = r.server_id
+            LEFT JOIN users u ON u.id = r.resolved_by_user_id
+            ORDER BY r.created_at DESC
+            LIMIT ?
+            """,
+            (safe_limit,),
+        ).fetchall()
+        return list(rows)
+
+
+def mark_shutdown_poke_seen(
+    *,
+    poke_id: str,
+) -> sqlite3.Row | None:
+    now = datetime.now(UTC).isoformat()
+    with get_conn() as conn:
+        conn.execute(
+            """
+            UPDATE shutdown_poke_requests
+            SET status = 'seen',
+                seen_at = COALESCE(seen_at, ?)
+            WHERE id = ? AND status = 'open'
+            """,
+            (now, poke_id),
+        )
+        return conn.execute(
+            """
+            SELECT r.*, h.name AS device_name, h.display_name AS device_display_name, u.username AS resolved_by_username
+            FROM shutdown_poke_requests r
+            LEFT JOIN hosts h ON h.id = r.server_id
+            LEFT JOIN users u ON u.id = r.resolved_by_user_id
+            WHERE r.id = ?
+            """,
+            (poke_id,),
+        ).fetchone()
+
+
+def mark_shutdown_poke_resolved(
+    *,
+    poke_id: str,
+    actor_user_id: int,
+) -> sqlite3.Row | None:
+    now = datetime.now(UTC).isoformat()
+    with get_conn() as conn:
+        conn.execute(
+            """
+            UPDATE shutdown_poke_requests
+            SET status = 'resolved',
+                seen_at = COALESCE(seen_at, ?),
+                resolved_at = COALESCE(resolved_at, ?),
+                resolved_by_user_id = COALESCE(resolved_by_user_id, ?)
+            WHERE id = ? AND status IN ('open', 'seen')
+            """,
+            (now, now, actor_user_id, poke_id),
+        )
+        return conn.execute(
+            """
+            SELECT r.*, h.name AS device_name, h.display_name AS device_display_name, u.username AS resolved_by_username
+            FROM shutdown_poke_requests r
+            LEFT JOIN hosts h ON h.id = r.server_id
+            LEFT JOIN users u ON u.id = r.resolved_by_user_id
+            WHERE r.id = ?
+            """,
+            (poke_id,),
+        ).fetchone()
 
 
 def create_discovery_run(requested_by: str, options_json: str) -> str:
