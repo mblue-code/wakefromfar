@@ -33,6 +33,18 @@ class SecurePrefs(context: Context) {
         prefs.edit().putInt(KEY_LAST_SEEN_ADMIN_ACTIVITY_EVENT_ID, value.coerceAtLeast(0)).apply()
     }
 
+    fun getLastNotifiedShutdownEventId(): Int = prefs.getInt(KEY_LAST_NOTIFIED_SHUTDOWN_EVENT_ID, 0)
+
+    fun setLastNotifiedShutdownEventId(value: Int) {
+        prefs.edit().putInt(KEY_LAST_NOTIFIED_SHUTDOWN_EVENT_ID, value.coerceAtLeast(0)).apply()
+    }
+
+    fun isAdminBackgroundAlertsEnabled(): Boolean = prefs.getBoolean(KEY_ADMIN_BACKGROUND_ALERTS_ENABLED, true)
+
+    fun setAdminBackgroundAlertsEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_ADMIN_BACKGROUND_ALERTS_ENABLED, enabled).apply()
+    }
+
     fun getThemeMode(): ThemeMode = ThemeMode.fromStorage(prefs.getString(KEY_THEME_MODE, null))
 
     fun setThemeMode(mode: ThemeMode) {
@@ -116,6 +128,8 @@ class SecurePrefs(context: Context) {
         const val KEY_TOKEN = "token"
         const val KEY_BACKEND_URL = "backend_url"
         const val KEY_LAST_SEEN_ADMIN_ACTIVITY_EVENT_ID = "last_seen_admin_activity_event_id"
+        const val KEY_LAST_NOTIFIED_SHUTDOWN_EVENT_ID = "last_notified_shutdown_event_id"
+        const val KEY_ADMIN_BACKGROUND_ALERTS_ENABLED = "admin_background_alerts_enabled"
         const val KEY_THEME_MODE = "theme_mode"
         const val KEY_FIRST_RUN_ONBOARDING_ACK = "first_run_onboarding_ack"
         const val DEFAULT_BACKEND_URL = "http://100.100.100.100:8080"

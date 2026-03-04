@@ -1,6 +1,7 @@
 package com.wakefromfar.wolrelay.data
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonObject
 
 @Serializable
 data class LoginRequest(
@@ -35,6 +36,7 @@ data class ActivityEventDto(
     val target_id: String? = null,
     val server_id: String? = null,
     val summary: String,
+    val metadata: JsonObject? = null,
     val created_at: String,
 )
 

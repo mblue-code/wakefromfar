@@ -1,8 +1,13 @@
 package com.wakefromfar.wolrelay.ui
 
+import android.Manifest
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -58,6 +63,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
@@ -72,6 +78,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.shadow
@@ -85,6 +92,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.wakefromfar.wolrelay.AppLanguage
@@ -93,6 +101,8 @@ import com.wakefromfar.wolrelay.data.ActivityEventDto
 import com.wakefromfar.wolrelay.data.MyDeviceDto
 import com.wakefromfar.wolrelay.data.ThemeMode
 import com.wakefromfar.wolrelay.ui.theme.MonoTextStyle
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonPrimitive
 
 private enum class AdminHomeTab {
     DEVICES,
@@ -130,7 +140,7 @@ fun WolRelayApp(
 
     DisposableEffect(lifecycleOwner, state.isAuthenticated, state.isAdmin, state.backendUrl) {
         val observer = LifecycleEventObserver { _, event ->
-            if (!state.isAuthenticated || !state.isAdmin) {
+            if (!state.isAuthenticated || !state.isAdmin || state.backendUrl.isBlank()) {
                 vm.stopAdminActivityPolling()
                 return@LifecycleEventObserver
             }
@@ -141,7 +151,9 @@ fun WolRelayApp(
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
-        if (state.isAuthenticated && state.isAdmin && lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
+        if (state.isAuthenticated && state.isAdmin && state.backendUrl.isNotBlank() &&
+            lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
+        ) {
             vm.startAdminActivityPolling()
         } else {
             vm.stopAdminActivityPolling()
@@ -151,6 +163,8 @@ fun WolRelayApp(
             vm.stopAdminActivityPolling()
         }
     }
+
+    NotificationPermissionEffect(enabled = state.isAuthenticated && state.isAdmin)
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -185,8 +199,11 @@ fun WolRelayApp(
                         SettingsMenu(
                             currentThemeMode = state.themeMode,
                             currentLanguage = state.appLanguage,
+                            showAdminAlertsToggle = state.isAuthenticated && state.isAdmin,
+                            adminBackgroundAlertsEnabled = state.adminBackgroundAlertsEnabled,
                             onThemeModeSelected = vm::updateThemeMode,
                             onLanguageSelected = vm::updateAppLanguage,
+                            onAdminBackgroundAlertsToggle = vm::updateAdminBackgroundAlertsEnabled,
                             onOpenLegalPrivacy = { showLegalPrivacy = true },
                         )
                         if (state.isAuthenticated) {
@@ -302,8 +319,11 @@ fun WolRelayApp(
 private fun SettingsMenu(
     currentThemeMode: ThemeMode,
     currentLanguage: AppLanguage,
+    showAdminAlertsToggle: Boolean,
+    adminBackgroundAlertsEnabled: Boolean,
     onThemeModeSelected: (ThemeMode) -> Unit,
     onLanguageSelected: (AppLanguage) -> Unit,
+    onAdminBackgroundAlertsToggle: (Boolean) -> Unit,
     onOpenLegalPrivacy: () -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
@@ -359,6 +379,21 @@ private fun SettingsMenu(
                     onClick = {
                         onLanguageSelected(language)
                         expanded = false
+                    },
+                )
+            }
+            if (showAdminAlertsToggle) {
+                HorizontalDivider()
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.action_admin_background_alerts)) },
+                    trailingIcon = {
+                        Switch(
+                            checked = adminBackgroundAlertsEnabled,
+                            onCheckedChange = null,
+                        )
+                    },
+                    onClick = {
+                        onAdminBackgroundAlertsToggle(!adminBackgroundAlertsEnabled)
                     },
                 )
             }
@@ -1163,6 +1198,33 @@ private fun ActivityFeedScreen(
 }
 
 @Composable
+private fun NotificationPermissionEffect(enabled: Boolean) {
+    if (!enabled || Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+        return
+    }
+    val context = LocalContext.current
+    var requestedThisSession by rememberSaveable { mutableStateOf(false) }
+    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
+        requestedThisSession = true
+    }
+
+    LaunchedEffect(enabled, requestedThisSession) {
+        if (!enabled || requestedThisSession) {
+            return@LaunchedEffect
+        }
+        val granted = ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.POST_NOTIFICATIONS,
+        ) == PackageManager.PERMISSION_GRANTED
+        if (granted) {
+            requestedThisSession = true
+            return@LaunchedEffect
+        }
+        launcher.launch(Manifest.permission.POST_NOTIFICATIONS)
+    }
+}
+
+@Composable
 private fun ActivityFilterChip(
     text: String,
     selected: Boolean,
@@ -1183,6 +1245,11 @@ private fun ActivityEventCard(
 ) {
     val shutdownRequestId = event.target_id?.trim().orEmpty()
     val canActOnShutdownRequest = event.event_type == "shutdown_poke_requested" && shutdownRequestId.isNotBlank()
+    val shutdownRequestNote = if (event.event_type == "shutdown_poke_requested") {
+        runCatching { event.metadata?.get("message")?.jsonPrimitive?.contentOrNull?.trim()?.ifBlank { null } }.getOrNull()
+    } else {
+        null
+    }
     ElevatedCard(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.elevatedCardColors(
@@ -1205,6 +1272,13 @@ private fun ActivityEventCard(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            if (!shutdownRequestNote.isNullOrBlank()) {
+                Text(
+                    text = stringResource(R.string.label_shutdown_note_inline, shutdownRequestNote),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             if (canActOnShutdownRequest) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),

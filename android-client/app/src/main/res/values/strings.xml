@@ -9,6 +9,7 @@
     <string name="action_back">Back</string>
     <string name="action_refresh">Refresh</string>
     <string name="action_logout">Logout</string>
+    <string name="action_admin_background_alerts">Admin background alerts</string>
     <string name="action_legal_privacy">Legal and privacy</string>
     <string name="theme_system">Theme: System</string>
     <string name="theme_light">Theme: Light</string>
@@ -62,7 +63,15 @@
     <string name="dialog_title_request_shutdown">Notify admin to shut down</string>
     <string name="dialog_message_request_shutdown">Send an optional note to the admin.</string>
     <string name="label_shutdown_note">Note (optional)</string>
+    <string name="label_shutdown_note_inline">Note: %1$s</string>
     <string name="button_notify_admin">Notify admin</string>
+    <string name="notification_channel_shutdown_requests_name">Shutdown requests</string>
+    <string name="notification_channel_shutdown_requests_description">Alerts for new shutdown requests from users.</string>
+    <string name="notification_shutdown_request_title">New shutdown request</string>
+    <string name="notification_channel_admin_monitoring_name">Admin monitoring</string>
+    <string name="notification_channel_admin_monitoring_description">Keeps admin shutdown-request alerts active in the background.</string>
+    <string name="notification_admin_monitoring_title">Admin monitoring active</string>
+    <string name="notification_admin_monitoring_text">Checking for shutdown requests every 10 minutes.</string>
     <string name="wake_delay_dialog_title">Waking device</string>
     <string name="wake_delay_dialog_message">Please wait. The device can need up to 1 minute to fully boot, and then up to 1 more minute before this app shows it as on.</string>
     <string name="action_ok">OK</string>

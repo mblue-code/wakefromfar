@@ -64,6 +64,7 @@ data class AppUiState(
     val isActivityLoading: Boolean = false,
     val isActivityLoadingMore: Boolean = false,
     val activityHasMore: Boolean = false,
+    val adminBackgroundAlertsEnabled: Boolean = true,
     val error: String? = null,
     val info: String? = null,
 ) {
@@ -78,6 +79,7 @@ data class AppUiState(
 class MainViewModel(application: Application) : AndroidViewModel(application), PurchasesUpdatedListener {
     private val prefs = SecurePrefs(application)
     private val api = ApiClient()
+    private val adminNotifications = AdminNotificationDispatcher(application.applicationContext)
     private val monetizationPrefs: SharedPreferences =
         application.getSharedPreferences(MONETIZATION_PREFS_NAME, Context.MODE_PRIVATE)
     private val billingClient = BillingClient
@@ -101,6 +103,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application), P
             firstRunOnboardingAcknowledged = prefs.isFirstRunOnboardingAcknowledged(),
             themeMode = prefs.getThemeMode(),
             appLanguage = LanguagePrefs.get(application),
+            adminBackgroundAlertsEnabled = prefs.isAdminBackgroundAlertsEnabled(),
             hasProAccess = isProUnlockedLocally(),
         ),
     )
@@ -108,6 +111,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application), P
 
     init {
         connectBilling()
+        syncAdminBackgroundPolling()
         if (state.isAuthenticated) {
             refreshDevices()
             if (state.isAdmin) {
@@ -153,9 +157,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application), P
         val nextUrl = value.trim().trimEnd('/')
         if (previousUrl != nextUrl) {
             prefs.setLastSeenAdminActivityEventId(0)
+            prefs.setLastNotifiedShutdownEventId(0)
             resetActivityFeedPagination(clearEvents = true)
         }
         state = state.copy(backendUrl = value)
+        syncAdminBackgroundPolling()
         if (allAssignedDevices.isNotEmpty()) {
             applyDeviceEntitlement()
         }
@@ -181,6 +187,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application), P
     fun updateAppLanguage(language: AppLanguage) {
         LanguagePrefs.set(getApplication(), language)
         state = state.copy(appLanguage = language)
+    }
+
+    fun updateAdminBackgroundAlertsEnabled(enabled: Boolean) {
+        prefs.setAdminBackgroundAlertsEnabled(enabled)
+        state = state.copy(adminBackgroundAlertsEnabled = enabled)
+        syncAdminBackgroundPolling()
     }
 
     fun acknowledgeFirstRunOnboarding() {
@@ -230,6 +242,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application), P
                     isLoading = false,
                     info = tr(R.string.info_login_success),
                 )
+                syncAdminBackgroundPolling()
                 refreshDevices()
                 if (role == "admin") {
                     refreshActivityEvents()
@@ -278,6 +291,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application), P
                     isLoading = false,
                     info = tr(R.string.info_onboarding_success, response.username),
                 )
+                syncAdminBackgroundPolling()
                 refreshDevices()
                 if (role == "admin") {
                     refreshActivityEvents()
@@ -294,6 +308,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application), P
         stopAdminActivityPolling()
         resetActivityFeedPagination(clearEvents = true)
         prefs.clearSession()
+        prefs.setLastNotifiedShutdownEventId(0)
         allAssignedDevices = emptyList()
         state = state.copy(
             token = null,
@@ -306,6 +321,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application), P
             activityHasMore = false,
             info = tr(R.string.info_logged_out),
         )
+        syncAdminBackgroundPolling()
     }
 
     fun refreshDevices() {
@@ -347,9 +363,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application), P
                 activityFeedCursor = events.lastOrNull()?.id
                 val latestEventId = events.maxOfOrNull { it.id }
                 val previousEventId = prefs.getLastSeenAdminActivityEventId()
+                val previousNotifiedEventId = prefs.getLastNotifiedShutdownEventId()
                 val newEventsCount = if (previousEventId > 0) events.count { it.id > previousEventId } else 0
+                val newShutdownRequests = if (previousNotifiedEventId > 0) {
+                    events.filter { it.id > previousNotifiedEventId && it.event_type == SHUTDOWN_REQUEST_EVENT_TYPE }
+                } else {
+                    emptyList()
+                }
                 if (latestEventId != null && latestEventId > previousEventId) {
                     prefs.setLastSeenAdminActivityEventId(latestEventId)
+                }
+                adminNotifications.notifyShutdownRequests(newShutdownRequests)
+                if (latestEventId != null && latestEventId > previousNotifiedEventId) {
+                    prefs.setLastNotifiedShutdownEventId(latestEventId)
                 }
                 state = state.copy(
                     activityEvents = events,
@@ -739,6 +765,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application), P
         }
     }
 
+    private fun syncAdminBackgroundPolling() {
+        val application = getApplication<Application>()
+        if (
+            state.isAuthenticated &&
+            state.isAdmin &&
+            state.backendUrl.isNotBlank() &&
+            state.adminBackgroundAlertsEnabled
+        ) {
+            AdminActivityBackgroundScheduler.cancel(application)
+            AdminAlertForegroundService.start(application)
+        } else {
+            AdminActivityBackgroundScheduler.cancel(application)
+            AdminAlertForegroundService.stop(application)
+        }
+    }
+
     private fun isProUnlockedLocally(): Boolean = monetizationPrefs.getBoolean(KEY_PRO_UNLOCKED, false)
 
     private fun setProUnlockedLocally(value: Boolean) {
@@ -785,6 +827,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application), P
     }
 
     companion object {
+        private const val SHUTDOWN_REQUEST_EVENT_TYPE = "shutdown_poke_requested"
         private const val PRO_PRODUCT_ID = "wakefromfar_pro_unlock"
         private const val MONETIZATION_PREFS_NAME = "wolrelay_monetization"
         private const val KEY_PRO_UNLOCKED = "pro_unlocked"

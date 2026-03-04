@@ -9,6 +9,7 @@
 	    <string name="action_back">Zurück</string>
 	    <string name="action_refresh">Aktualisieren</string>
 	    <string name="action_logout">Abmelden</string>
+	    <string name="action_admin_background_alerts">Admin-Hintergrundhinweise</string>
 	    <string name="action_legal_privacy">Rechtliches und Datenschutz</string>
 	    <string name="theme_system">Design: System</string>
 	    <string name="theme_light">Design: Hell</string>
@@ -62,7 +63,15 @@
 	    <string name="dialog_title_request_shutdown">Admin zum Herunterfahren benachrichtigen</string>
 	    <string name="dialog_message_request_shutdown">Optional eine kurze Notiz an den Admin senden.</string>
 	    <string name="label_shutdown_note">Notiz (optional)</string>
+	    <string name="label_shutdown_note_inline">Notiz: %1$s</string>
 	    <string name="button_notify_admin">Admin benachrichtigen</string>
+	    <string name="notification_channel_shutdown_requests_name">Shutdown-Anfragen</string>
+	    <string name="notification_channel_shutdown_requests_description">Hinweise auf neue Shutdown-Anfragen von Benutzern.</string>
+	    <string name="notification_shutdown_request_title">Neue Shutdown-Anfrage</string>
+	    <string name="notification_channel_admin_monitoring_name">Admin-Überwachung</string>
+	    <string name="notification_channel_admin_monitoring_description">Hält Shutdown-Anfrage-Hinweise für Admins im Hintergrund aktiv.</string>
+	    <string name="notification_admin_monitoring_title">Admin-Überwachung aktiv</string>
+	    <string name="notification_admin_monitoring_text">Prüft alle 10 Minuten auf Shutdown-Anfragen.</string>
 	    <string name="wake_delay_dialog_title">Gerät wird aufgeweckt</string>
 	    <string name="wake_delay_dialog_message">Bitte warten. Das Gerät kann bis zu 1 Minute zum vollständigen Start brauchen und danach noch bis zu 1 weitere Minute, bis es in dieser App als an angezeigt wird.</string>
 	    <string name="action_ok">OK</string>
