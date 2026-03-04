@@ -61,3 +61,13 @@ In Cloudflare DNS, create/update an `A` record:
 curl -fsS http://127.0.0.1:8080/health
 curl -k --resolve wakefromfar.bluecherlab1887.work:443:127.0.0.1 https://wakefromfar.bluecherlab1887.work/health
 ```
+
+## 6) Device setup reminder (power state)
+
+When creating devices, configure power-check fields as well:
+
+- `check_method=tcp`
+- `check_target=<device-ip-or-hostname>`
+- `check_port=<open-tcp-port-when-device-is-on>` (for example `80`, `443`, `445`, `22`)
+
+If `check_target` or `check_port` is missing, power state remains `unknown` and logs show `missing_check_target` or `missing_check_port`.

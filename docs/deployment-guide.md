@@ -100,15 +100,26 @@ docker compose exec wol-backend python -m app.cli add-host \
   --mac "AA:BB:CC:DD:EE:01" \
   --broadcast "192.168.1.255" \
   --source-ip "192.168.1.10" \
-  --interface "eth0"
+  --interface "eth0" \
+  --check-method "tcp" \
+  --check-target "192.168.1.50" \
+  --check-port 80
 
 docker compose exec wol-backend python -m app.cli add-host \
   --name "PC-B" \
   --mac "AA:BB:CC:DD:EE:02" \
   --broadcast "10.0.0.255" \
   --source-ip "10.0.0.2" \
-  --interface "enx001122334455"
+  --interface "enx001122334455" \
+  --check-method "tcp" \
+  --check-target "10.0.0.20" \
+  --check-port 22
 ```
+
+Important:
+
+- `check_target` + `check_port` are required for reliable power state in app/admin UI.
+- If missing, `/me/devices` can only report `unknown`, and logs will show `missing_check_target` or `missing_check_port`.
 
 ## 5. Docker Deployment Behind Reverse Proxy
 
@@ -316,6 +327,9 @@ If WoL fails:
 4. Assign device to test user
 5. Trigger wake for both devices
 6. Check `/admin/wake-logs` and verify `sent_to` network targets
+7. Run power checks and verify non-`unknown` state:
+   - `POST /me/devices/{id}/power-check`
+   - if result is `unknown` with `missing_check_target`/`missing_check_port`, set `check_target` + `check_port` on the device
 
 ## 12. Backup / Restore
 
@@ -341,5 +355,5 @@ python3 backend/scripts/restore_db.py backups/<backup-file>.db --force
 - Docker daemon not running: start Docker engine/Desktop first.
 - Wrong proxy CIDR: backend ignores forwarded headers and sees proxy source IP only.
 - Wrong broadcast: packet sent successfully but target never wakes.
-- Missing check target/port: if `check_target` or `check_port` is not set, power state always returns `unknown` — this is a configuration gap, not a connectivity failure. Set both fields on the device.
+- Missing check target/port: if `check_target` or `check_port` is not set, power state always returns `unknown` (`missing_check_target` / `missing_check_port`) — this is a configuration gap, not a connectivity failure. Set both fields on the device.
 - Non-host Docker network for backend: broadcast can be dropped or routed incorrectly.
