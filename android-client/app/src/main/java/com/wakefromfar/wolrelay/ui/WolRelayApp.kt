@@ -5,8 +5,11 @@ import android.content.Context
 import android.content.ContextWrapper
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -16,6 +19,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -180,7 +184,9 @@ fun WolRelayApp(
                     if (!showLegalPrivacy) {
                         SettingsMenu(
                             currentThemeMode = state.themeMode,
+                            currentLanguage = state.appLanguage,
                             onThemeModeSelected = vm::updateThemeMode,
+                            onLanguageSelected = vm::updateAppLanguage,
                             onOpenLegalPrivacy = { showLegalPrivacy = true },
                         )
                         if (state.isAuthenticated) {
@@ -269,6 +275,8 @@ fun WolRelayApp(
 
             state.hasInviteToken -> InviteClaimScreen(
                 state = state,
+                currentLanguage = state.appLanguage,
+                onLanguageSelected = vm::updateAppLanguage,
                 onBackendUrlChange = vm::updateBackendUrl,
                 onClaimPasswordChange = vm::updateClaimPassword,
                 onClaim = vm::claimInvite,
@@ -293,7 +301,9 @@ fun WolRelayApp(
 @Composable
 private fun SettingsMenu(
     currentThemeMode: ThemeMode,
+    currentLanguage: AppLanguage,
     onThemeModeSelected: (ThemeMode) -> Unit,
+    onLanguageSelected: (AppLanguage) -> Unit,
     onOpenLegalPrivacy: () -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
@@ -328,6 +338,26 @@ private fun SettingsMenu(
                     },
                     onClick = {
                         onThemeModeSelected(mode)
+                        expanded = false
+                    },
+                )
+            }
+            HorizontalDivider()
+            AppLanguage.entries.forEach { language ->
+                val languageLabelRes = when (language) {
+                    AppLanguage.ENGLISH -> R.string.language_english
+                    AppLanguage.GERMAN -> R.string.language_german
+                }
+                DropdownMenuItem(
+                    text = { Text(stringResource(languageLabelRes)) },
+                    leadingIcon = {
+                        RadioButton(
+                            selected = language == currentLanguage,
+                            onClick = null,
+                        )
+                    },
+                    onClick = {
+                        onLanguageSelected(language)
                         expanded = false
                     },
                 )
@@ -588,6 +618,8 @@ private fun LegalBullet(text: String) {
 @Composable
 private fun InviteClaimScreen(
     state: AppUiState,
+    currentLanguage: AppLanguage,
+    onLanguageSelected: (AppLanguage) -> Unit,
     onBackendUrlChange: (String) -> Unit,
     onClaimPasswordChange: (String) -> Unit,
     onClaim: () -> Unit,
@@ -626,6 +658,14 @@ private fun InviteClaimScreen(
                 text = stringResource(R.string.invite_detected),
                 style = MaterialTheme.typography.headlineMedium,
                 color = MaterialTheme.colorScheme.onBackground,
+            )
+
+            Spacer(modifier = Modifier.height(4.dp))
+
+            LanguageSelector(
+                currentLanguage = currentLanguage,
+                onLanguageSelected = onLanguageSelected,
+                modifier = Modifier.fillMaxWidth(),
             )
 
             Spacer(modifier = Modifier.height(4.dp))
@@ -1428,6 +1468,7 @@ private fun StatusBadge(stateKey: String) {
 }
 
 @Composable
+@OptIn(ExperimentalLayoutApi::class)
 private fun DeviceCard(
     device: MyDeviceDto,
     onWake: (String) -> Unit,
@@ -1538,28 +1579,42 @@ private fun DeviceCard(
                     }
                 }
 
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    TextButton(onClick = { onRequestShutdown(device.id) }) {
-                        Text(stringResource(R.string.button_request_shutdown))
-                    }
-                    FilledTonalButton(
-                        onClick = { onWake(device.id) },
-                        colors = ButtonDefaults.filledTonalButtonColors(
-                            containerColor = colorScheme.tertiaryContainer,
-                            contentColor = colorScheme.onTertiaryContainer,
-                        ),
+                BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+                    val useStackedActions = maxWidth < 330.dp
+
+                    FlowRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                        maxItemsInEachRow = if (useStackedActions) 1 else 2,
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.PowerSettingsNew,
-                            contentDescription = null,
-                            modifier = Modifier.size(16.dp),
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(stringResource(R.string.button_wake))
+                        TextButton(
+                            onClick = { onRequestShutdown(device.id) },
+                            modifier = if (useStackedActions) Modifier.fillMaxWidth() else Modifier,
+                        ) {
+                            Text(
+                                text = stringResource(R.string.button_request_shutdown),
+                                maxLines = if (useStackedActions) 1 else 2,
+                                softWrap = true,
+                                overflow = TextOverflow.Clip,
+                            )
+                        }
+                        FilledTonalButton(
+                            onClick = { onWake(device.id) },
+                            modifier = if (useStackedActions) Modifier.fillMaxWidth() else Modifier.widthIn(min = 96.dp),
+                            colors = ButtonDefaults.filledTonalButtonColors(
+                                containerColor = colorScheme.tertiaryContainer,
+                                contentColor = colorScheme.onTertiaryContainer,
+                            ),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.PowerSettingsNew,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp),
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(text = stringResource(R.string.button_wake))
+                        }
                     }
                 }
             }
