@@ -19,10 +19,10 @@ def verify_password(plain_password: str, password_hash: str) -> bool:
     return pwd_context.verify(plain_password, password_hash)
 
 
-def create_token(username: str, role: str) -> tuple[str, int]:
+def create_token(username: str, role: str, token_version: int = 0) -> tuple[str, int]:
     settings = get_settings()
     expires = datetime.now(UTC) + timedelta(seconds=settings.token_expires_seconds)
-    payload = {"sub": username, "role": role, "exp": expires}
+    payload = {"sub": username, "role": role, "ver": int(token_version), "exp": expires}
     token = jwt.encode(payload, settings.app_secret, algorithm="HS256")
     return token, settings.token_expires_seconds
 

@@ -120,6 +120,38 @@ def test_admin_user_and_device_patch_delete(client):
     assert delete_user_res.json() == {"ok": True}
 
 
+def test_password_change_revokes_existing_tokens(client):
+    admin_token = login(client, "admin", "adminpass123456")
+    admin_h = auth_headers(admin_token)
+
+    create_user_res = client.post(
+        "/admin/users",
+        headers=admin_h,
+        json={"username": "revoked-user", "password": "initialpassword12", "role": "user"},
+    )
+    assert create_user_res.status_code == 201, create_user_res.text
+    user_id = create_user_res.json()["id"]
+
+    old_token = login(client, "revoked-user", "initialpassword12")
+    old_headers = auth_headers(old_token)
+    before_change = client.get("/me/devices", headers=old_headers)
+    assert before_change.status_code == 200, before_change.text
+
+    rotate_password_res = client.patch(
+        f"/admin/users/{user_id}",
+        headers=admin_h,
+        json={"password": "newpassword456"},
+    )
+    assert rotate_password_res.status_code == 200, rotate_password_res.text
+
+    old_token_after_change = client.get("/me/devices", headers=old_headers)
+    assert old_token_after_change.status_code == 401, old_token_after_change.text
+
+    new_token = login(client, "revoked-user", "newpassword456")
+    after_change = client.get("/me/devices", headers=auth_headers(new_token))
+    assert after_change.status_code == 200, after_change.text
+
+
 def test_me_devices_triggers_background_power_check_for_stale_entries(client, monkeypatch):
     admin_token = login(client, "admin", "adminpass123456")
     admin_h = auth_headers(admin_token)

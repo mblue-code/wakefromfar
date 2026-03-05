@@ -52,6 +52,7 @@ from .db import (
     update_user_role,
 )
 from .power import run_power_check
+from .password_policy import min_password_length_for_role
 from .rate_limit import get_rate_limiter
 from .security import create_token, decode_token, hash_password, verify_password
 from .telemetry import get_counters
@@ -181,7 +182,7 @@ _I18N = {
         "col_within_2m": "Within 2m",
         "placeholder_new_password_optional": "new password (optional)",
         "placeholder_username": "username",
-        "placeholder_password_min12": "password (>=6)",
+        "placeholder_password_min12": "password (>=6 user, >=12 admin)",
         "placeholder_display_name": "display name",
         "placeholder_check_target": "check target",
         "placeholder_check_port": "check port",
@@ -222,7 +223,9 @@ _I18N = {
         "label_link": "Link",
         "alt_invite_qr_code": "Invite QR Code",
         "error_invalid_role": "Invalid role",
-        "error_password_min_length": "Password must be at least 6 characters",
+        "error_password_min_length_user": "Password must be at least 6 characters",
+        "error_password_min_length_admin": "Admin password must be at least 12 characters",
+        "error_admin_promotion_requires_password": "Promoting to admin requires setting a new admin password",
         "error_username_exists": "Username already exists",
         "error_user_not_found": "User not found",
         "error_cannot_demote_last_admin": "Cannot demote last admin",
@@ -381,7 +384,7 @@ _I18N = {
         "col_within_2m": "Innerhalb von 2 Min.",
         "placeholder_new_password_optional": "Neues Passwort (optional)",
         "placeholder_username": "Benutzername",
-        "placeholder_password_min12": "Passwort (mind. 6 Zeichen)",
+        "placeholder_password_min12": "Passwort (mind. 6 Benutzer, mind. 12 Admin)",
         "placeholder_display_name": "Anzeigename",
         "placeholder_check_target": "Prüfziel",
         "placeholder_check_port": "Prüfport",
@@ -422,7 +425,9 @@ _I18N = {
         "label_link": "Link",
         "alt_invite_qr_code": "Einladungs-QR-Code",
         "error_invalid_role": "Ungültige Rolle",
-        "error_password_min_length": "Passwort muss mindestens 6 Zeichen haben",
+        "error_password_min_length_user": "Passwort muss mindestens 6 Zeichen haben",
+        "error_password_min_length_admin": "Admin-Passwort muss mindestens 12 Zeichen haben",
+        "error_admin_promotion_requires_password": "Für die Beförderung zum Admin muss ein neues Admin-Passwort gesetzt werden",
         "error_username_exists": "Benutzername existiert bereits",
         "error_user_not_found": "Benutzer nicht gefunden",
         "error_cannot_demote_last_admin": "Letzter Admin kann nicht herabgestuft werden",
@@ -631,6 +636,12 @@ def _admin_from_cookie(request: Request):
     username = payload.get("sub", "")
     user = get_user_by_username(username)
     if not user or user["role"] != "admin":
+        return None
+    try:
+        payload_version = int(payload.get("ver", 0))
+    except (TypeError, ValueError):
+        return None
+    if payload_version != int(user["token_version"] or 0):
         return None
     return user
 
@@ -1105,7 +1116,7 @@ def login_submit(
             f"/admin/ui/login?{urlencode({'next': safe_next, 'error': error_message, 'lang': resolved_lang})}",
             status_code=303,
         )
-    token, _ = create_token(username=user["username"], role=user["role"])
+    token, _ = create_token(username=user["username"], role=user["role"], token_version=int(user["token_version"] or 0))
     response = RedirectResponse(safe_next, status_code=303)
     response.set_cookie(
         "admin_session",
@@ -1234,8 +1245,10 @@ def users_create(request: Request, username: str = Form(...), password: str = Fo
     t = lambda key, **kwargs: _tr(request, key, **kwargs)
     if role not in {"admin", "user"}:
         return _redirect("/admin/ui/users", error=t("error_invalid_role"), request=request)
-    if len(password) < 6:
-        return _redirect("/admin/ui/users", error=t("error_password_min_length"), request=request)
+    required_len = min_password_length_for_role(role)
+    if len(password) < required_len:
+        error_key = "error_password_min_length_admin" if role == "admin" else "error_password_min_length_user"
+        return _redirect("/admin/ui/users", error=t(error_key), request=request)
     if get_user_by_username(username):
         return _redirect("/admin/ui/users", error=t("error_username_exists"), request=request)
     user_id = create_user(username=username, password_hash=hash_password(password), role=role)
@@ -1262,10 +1275,14 @@ def users_update(request: Request, user_id: int, role: str = Form(...), password
         return _redirect("/admin/ui/users", error=t("error_invalid_role"), request=request)
     if target["role"] == "admin" and role != "admin" and count_admin_users() <= 1:
         return _redirect("/admin/ui/users", error=t("error_cannot_demote_last_admin"), request=request)
+    if target["role"] != "admin" and role == "admin" and not password:
+        return _redirect("/admin/ui/users", error=t("error_admin_promotion_requires_password"), request=request)
     update_user_role(user_id, role)
     if password:
-        if len(password) < 6:
-            return _redirect("/admin/ui/users", error=t("error_password_min_length"), request=request)
+        required_len = min_password_length_for_role(role)
+        if len(password) < required_len:
+            error_key = "error_password_min_length_admin" if role == "admin" else "error_password_min_length_user"
+            return _redirect("/admin/ui/users", error=t(error_key), request=request)
         update_user_password_by_id(user_id, hash_password(password))
     log_admin_action(
         actor_username=admin["username"],

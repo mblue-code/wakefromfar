@@ -46,6 +46,7 @@ def _migration_001_base_schema(conn: sqlite3.Connection) -> None:
             username TEXT UNIQUE NOT NULL,
             password_hash TEXT NOT NULL,
             role TEXT NOT NULL CHECK(role IN ('admin', 'user')),
+            token_version INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL
         )
         """
@@ -290,6 +291,11 @@ def _migration_007_shutdown_poke_requests(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_shutdown_poke_requests_status_created_at ON shutdown_poke_requests(status, created_at DESC)")
 
 
+def _migration_008_user_token_version(conn: sqlite3.Connection) -> None:
+    _add_column_if_missing(conn, "users", "token_version", "INTEGER NOT NULL DEFAULT 0")
+    conn.execute("UPDATE users SET token_version = 0 WHERE token_version IS NULL")
+
+
 def init_db() -> None:
     with get_conn() as conn:
         conn.execute(
@@ -312,6 +318,7 @@ def init_db() -> None:
             5: _migration_005_discovery_schema,
             6: _migration_006_activity_events,
             7: _migration_007_shutdown_poke_requests,
+            8: _migration_008_user_token_version,
         }
         for version in sorted(migrations.keys()):
             if version in applied:
@@ -345,7 +352,7 @@ def count_admin_users() -> int:
 def update_user_password(username: str, password_hash: str) -> bool:
     with get_conn() as conn:
         cur = conn.execute(
-            "UPDATE users SET password_hash = ? WHERE username = ?",
+            "UPDATE users SET password_hash = ?, token_version = COALESCE(token_version, 0) + 1 WHERE username = ?",
             (password_hash, username),
         )
         return cur.rowcount > 0
@@ -354,7 +361,7 @@ def update_user_password(username: str, password_hash: str) -> bool:
 def update_user_password_by_id(user_id: int, password_hash: str) -> bool:
     with get_conn() as conn:
         cur = conn.execute(
-            "UPDATE users SET password_hash = ? WHERE id = ?",
+            "UPDATE users SET password_hash = ?, token_version = COALESCE(token_version, 0) + 1 WHERE id = ?",
             (password_hash, user_id),
         )
         return cur.rowcount > 0
@@ -385,7 +392,7 @@ def create_user(username: str, password_hash: str, role: str) -> int:
     now = datetime.now(UTC).isoformat()
     with get_conn() as conn:
         cur = conn.execute(
-            "INSERT INTO users(username, password_hash, role, created_at) VALUES (?, ?, ?, ?)",
+            "INSERT INTO users(username, password_hash, role, token_version, created_at) VALUES (?, ?, ?, 0, ?)",
             (username, password_hash, role, now),
         )
         return int(cur.lastrowid)

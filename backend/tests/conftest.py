@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 @pytest.fixture()
 def client(tmp_path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
-    monkeypatch.setenv("APP_SECRET", "test-secret-value-1234")
+    monkeypatch.setenv("APP_SECRET", "test-secret-value-1234-abcdef-5678")
     monkeypatch.setenv("ADMIN_USER", "admin")
     monkeypatch.setenv("ADMIN_PASS", "adminpass123456")
     monkeypatch.setenv("DATA_DIR", str(tmp_path))

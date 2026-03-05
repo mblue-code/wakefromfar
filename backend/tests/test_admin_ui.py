@@ -5,7 +5,7 @@ import re
 from app.config import get_settings
 from app.power import PowerCheckResult
 
-from .conftest import login
+from .conftest import auth_headers, login
 
 
 def test_admin_ui_requires_login(client):
@@ -61,6 +61,35 @@ def test_admin_ui_login_and_crud_paths(client):
     users_page_after = client.get("/admin/ui/users")
     assert users_page_after.status_code == 200
     assert "uiuser" in users_page_after.text
+
+
+def test_admin_ui_session_is_revoked_after_password_change(client):
+    login_res = client.post(
+        "/admin/ui/login",
+        data={"username": "admin", "password": "adminpass123456", "next": "/admin/ui/users"},
+        follow_redirects=False,
+    )
+    assert login_res.status_code == 303
+
+    users_page = client.get("/admin/ui/users")
+    assert users_page.status_code == 200
+
+    admin_token = login(client, "admin", "adminpass123456")
+    admin_h = auth_headers(admin_token)
+    users = client.get("/admin/users", headers=admin_h)
+    assert users.status_code == 200, users.text
+    admin_id = next(row["id"] for row in users.json() if row["username"] == "admin")
+
+    update = client.patch(
+        f"/admin/users/{admin_id}",
+        headers=admin_h,
+        json={"password": "adminpassword7890"},
+    )
+    assert update.status_code == 200, update.text
+
+    stale_session_res = client.get("/admin/ui/users", follow_redirects=False)
+    assert stale_session_res.status_code == 303
+    assert stale_session_res.headers["location"].startswith("/admin/ui/login")
 
 
 def test_admin_ui_manual_provisioning_and_test_power_check(client, monkeypatch):

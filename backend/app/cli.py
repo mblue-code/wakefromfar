@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 
 from .db import create_host, create_user, get_user_by_username, init_db, list_hosts
+from .password_policy import min_password_length_for_role
 from .security import hash_password
 from .wol import normalize_mac
 
@@ -41,6 +42,9 @@ def main() -> None:
     if args.command == "add-user":
         if get_user_by_username(args.username):
             raise SystemExit(f"User '{args.username}' already exists")
+        min_len = min_password_length_for_role(args.role)
+        if len(args.password) < min_len:
+            raise SystemExit(f"Password for role '{args.role}' must be at least {min_len} characters")
         create_user(args.username, hash_password(args.password), args.role)
         print(f"Created user '{args.username}' ({args.role})")
         return

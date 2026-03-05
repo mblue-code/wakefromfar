@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from app.config import get_settings
 from app.power import PowerCheckResult
 
 from .conftest import auth_headers, login
@@ -127,3 +128,37 @@ def test_pilot_metrics_endpoint_is_disabled(client):
     admin_h, _, _ = _setup_user_and_device(client, username="pilot-user")
     metrics = client.get("/admin/pilot-metrics", headers=admin_h)
     assert metrics.status_code == 410, metrics.text
+
+
+def test_admin_password_policy_is_stricter_than_user_policy(client):
+    admin_token = login(client, "admin", "adminpass123456")
+    admin_h = auth_headers(admin_token)
+
+    create_user = client.post(
+        "/admin/users",
+        headers=admin_h,
+        json={"username": "policy-user", "password": "123456", "role": "user"},
+    )
+    assert create_user.status_code == 201, create_user.text
+    user_id = create_user.json()["id"]
+
+    create_admin_with_short_password = client.post(
+        "/admin/users",
+        headers=admin_h,
+        json={"username": "policy-admin", "password": "123456", "role": "admin"},
+    )
+    assert create_admin_with_short_password.status_code == 400
+
+    promote_without_password_rotation = client.patch(
+        f"/admin/users/{user_id}",
+        headers=admin_h,
+        json={"role": "admin"},
+    )
+    assert promote_without_password_rotation.status_code == 400
+
+    promote_with_admin_password = client.patch(
+        f"/admin/users/{user_id}",
+        headers=admin_h,
+        json={"role": "admin", "password": "123456789012"},
+    )
+    assert promote_with_admin_password.status_code == 200, promote_with_admin_password.text

@@ -71,6 +71,12 @@ from .discovery import (
 )
 from .network import build_network_diagnostics_snapshot
 from .power import PowerCheckResult, run_power_check
+from .password_policy import (
+    MIN_ADMIN_PASSWORD_LENGTH,
+    MIN_APP_SECRET_LENGTH,
+    min_password_length_for_role,
+    validate_password_for_role,
+)
 from .rate_limit import configure_rate_limiter, get_rate_limiter
 from .schemas import (
     AdminDeviceCreate,
@@ -116,14 +122,14 @@ def _init_bootstrap() -> None:
         raise RuntimeError(
             "APP_SECRET uses an unsafe placeholder value. Set APP_SECRET to a random secret before startup."
         )
-    if len(settings.app_secret) < 16:
-        raise RuntimeError("APP_SECRET is too short. Use at least 16 characters.")
+    if len(settings.app_secret) < MIN_APP_SECRET_LENGTH:
+        raise RuntimeError(f"APP_SECRET is too short. Use at least {MIN_APP_SECRET_LENGTH} characters.")
     if settings.admin_pass and settings.admin_pass in _UNSAFE_ADMIN_PASSWORDS:
         raise RuntimeError(
             "ADMIN_PASS uses an unsafe placeholder value. Set ADMIN_PASS to a unique password before startup."
         )
-    if settings.admin_pass and len(settings.admin_pass) < 6:
-        raise RuntimeError("ADMIN_PASS is too short. Use at least 6 characters.")
+    if settings.admin_pass and len(settings.admin_pass) < MIN_ADMIN_PASSWORD_LENGTH:
+        raise RuntimeError(f"ADMIN_PASS is too short. Use at least {MIN_ADMIN_PASSWORD_LENGTH} characters.")
     configure_rate_limiter(settings)
     init_db()
     if settings.admin_user and settings.admin_pass:
@@ -276,6 +282,13 @@ def get_current_user(
     user = get_user_by_username(username)
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unknown user")
+    token_version = int(user["token_version"] or 0)
+    try:
+        payload_version = int(payload.get("ver", 0))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+    if payload_version != token_version:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session expired. Please log in again.")
     return {"id": user["id"], "username": user["username"], "role": user["role"]}
 
 
@@ -776,7 +789,11 @@ def login(body: LoginRequest, request: Request) -> LoginResponse:
         structured_log("login.failed", ip=ip, username=body.username)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 
-    token, expires_in = create_token(username=user["username"], role=user["role"])
+    token, expires_in = create_token(
+        username=user["username"],
+        role=user["role"],
+        token_version=int(user["token_version"] or 0),
+    )
     increment_counter("login.success")
     structured_log("login.success", ip=ip, username=user["username"], role=user["role"])
     return LoginResponse(token=token, expires_in=expires_in)
@@ -1184,6 +1201,10 @@ def admin_create_user(
 ) -> AdminUserOut:
     if get_user_by_username(body.username):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Username already exists")
+    try:
+        validate_password_for_role(body.password, body.role)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     created_id = create_user(
         username=body.username,
@@ -1224,13 +1245,29 @@ def admin_update_user(
     if not changes:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No fields to update")
 
+    target_role = str(changes.get("role") or current["role"])
     if "role" in changes:
-        new_role = changes["role"]
+        new_role = str(changes["role"])
         if current["role"] == "admin" and new_role != "admin" and count_admin_users() <= 1:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot demote last admin")
         update_user_role(user_id=user_id, role=new_role)
+
+    if target_role == "admin" and current["role"] != "admin" and "password" not in changes:
+        required = min_password_length_for_role("admin")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Promoting a user to admin requires setting a new password with at least {required} characters.",
+        )
+
     if "password" in changes:
-        update_user_password_by_id(user_id=user_id, password_hash=hash_password(changes["password"]))
+        password_value = changes["password"]
+        if password_value is None:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Password cannot be null")
+        try:
+            validate_password_for_role(str(password_value), target_role)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        update_user_password_by_id(user_id=user_id, password_hash=hash_password(str(password_value)))
 
     updated = get_user_by_id(user_id)
     if not updated:
