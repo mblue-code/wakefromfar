@@ -14,6 +14,8 @@ def client(tmp_path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
     monkeypatch.setenv("DB_FILENAME", "test.db")
     monkeypatch.setenv("ENFORCE_IP_ALLOWLIST", "false")
+    monkeypatch.setenv("TRUST_PROXY_HEADERS", "false")
+    monkeypatch.setenv("TRUSTED_PROXY_CIDRS", "127.0.0.1/32,::1/128")
     monkeypatch.setenv("RATE_LIMIT_BACKEND", "memory")
 
     from app.config import get_settings
@@ -25,7 +27,7 @@ def client(tmp_path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     reset_rate_limiter_for_tests()
     reset_counters()
 
-    with TestClient(app) as test_client:
+    with TestClient(app, client=("127.0.0.1", 50000)) as test_client:
         yield test_client
 
     reset_rate_limiter_for_tests()

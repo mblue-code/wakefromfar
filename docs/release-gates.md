@@ -83,6 +83,6 @@ This checklist is the final gate before promoting builds.
 
 ## Note
 
-- `RATE_LIMIT_BACKEND=memory` is valid for single-instance deployments.
-- Use shared Redis backend for global limits across multiple backend instances.
+- Default to `RATE_LIMIT_BACKEND=redis`.
+- `RATE_LIMIT_BACKEND=memory` is acceptable only for simple single-instance deployments.
 - Admin mobile notifications remain backend-driven/in-app (no Firebase/FCM dependency).

@@ -5,6 +5,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from .password_policy import MIN_USER_PASSWORD_LENGTH
+
 
 class LoginRequest(BaseModel):
     username: str
@@ -18,7 +20,7 @@ class LoginResponse(BaseModel):
 
 class OnboardingClaimRequest(BaseModel):
     token: str
-    password: str = Field(min_length=6)
+    password: str = Field(min_length=MIN_USER_PASSWORD_LENGTH)
 
 
 class OnboardingClaimResponse(BaseModel):
@@ -54,12 +56,12 @@ class WakeResponse(BaseModel):
 
 class AdminUserCreate(BaseModel):
     username: str
-    password: str = Field(min_length=6)
+    password: str = Field(min_length=MIN_USER_PASSWORD_LENGTH)
     role: str = Field(pattern="^(admin|user)$")
 
 
 class AdminUserUpdate(BaseModel):
-    password: str | None = Field(default=None, min_length=6)
+    password: str | None = Field(default=None, min_length=MIN_USER_PASSWORD_LENGTH)
     role: str | None = Field(default=None, pattern="^(admin|user)$")
 
 

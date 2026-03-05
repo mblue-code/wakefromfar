@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.config import get_settings
+from app.config import Settings, get_settings
 from app.power import PowerCheckResult
 
 from .conftest import auth_headers, login
@@ -130,14 +130,21 @@ def test_pilot_metrics_endpoint_is_disabled(client):
     assert metrics.status_code == 410, metrics.text
 
 
-def test_admin_password_policy_is_stricter_than_user_policy(client):
+def test_password_policy_enforces_role_specific_minimums(client):
     admin_token = login(client, "admin", "adminpass123456")
     admin_h = auth_headers(admin_token)
+
+    create_user_with_short_password = client.post(
+        "/admin/users",
+        headers=admin_h,
+        json={"username": "policy-short-user", "password": "123456", "role": "user"},
+    )
+    assert create_user_with_short_password.status_code == 422
 
     create_user = client.post(
         "/admin/users",
         headers=admin_h,
-        json={"username": "policy-user", "password": "123456", "role": "user"},
+        json={"username": "policy-user", "password": "1234567890", "role": "user"},
     )
     assert create_user.status_code == 201, create_user.text
     user_id = create_user.json()["id"]
@@ -147,7 +154,7 @@ def test_admin_password_policy_is_stricter_than_user_policy(client):
         headers=admin_h,
         json={"username": "policy-admin", "password": "123456", "role": "admin"},
     )
-    assert create_admin_with_short_password.status_code == 400
+    assert create_admin_with_short_password.status_code == 422
 
     promote_without_password_rotation = client.patch(
         f"/admin/users/{user_id}",
@@ -162,3 +169,19 @@ def test_admin_password_policy_is_stricter_than_user_policy(client):
         json={"role": "admin", "password": "123456789012"},
     )
     assert promote_with_admin_password.status_code == 200, promote_with_admin_password.text
+
+
+def test_api_docs_are_disabled_by_default(client):
+    docs = client.get("/docs")
+    assert docs.status_code == 404
+
+    openapi = client.get("/openapi.json")
+    assert openapi.status_code == 404
+
+
+def test_security_defaults_for_settings_ignore_env_file(monkeypatch):
+    monkeypatch.delenv("RATE_LIMIT_BACKEND", raising=False)
+    monkeypatch.delenv("ENABLE_API_DOCS", raising=False)
+    settings = Settings(_env_file=None)
+    assert settings.rate_limit_backend == "redis"
+    assert settings.enable_api_docs is False

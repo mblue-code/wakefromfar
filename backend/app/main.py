@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import ipaddress
 import json
 import time
 from contextlib import asynccontextmanager
@@ -12,7 +11,7 @@ from fastapi.responses import RedirectResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from .admin_ui import router as admin_ui_router
-from .config import get_settings
+from .config import Settings, get_settings
 from .diagnostics import device_diagnostic_hints
 from .db import (
     assign_device_to_user,
@@ -78,6 +77,7 @@ from .password_policy import (
     validate_password_for_role,
 )
 from .rate_limit import configure_rate_limiter, get_rate_limiter
+from .request_context import get_request_ip, is_https_request, is_ip_in_networks
 from .schemas import (
     AdminDeviceCreate,
     AdminDeviceOut,
@@ -114,6 +114,16 @@ auth_scheme = HTTPBearer(auto_error=True)
 _NETWORK_DIAGNOSTICS: dict[str, object] = {}
 _UNSAFE_APP_SECRETS = {"change-me", "replace-with-a-random-long-secret"}
 _UNSAFE_ADMIN_PASSWORDS = {"change-me-admin-password", "replace-with-strong-password"}
+_ADMIN_UI_CSP = (
+    "default-src 'self'; "
+    "script-src 'self' 'unsafe-inline'; "
+    "style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data:; "
+    "font-src 'self'; "
+    "form-action 'self'; "
+    "frame-ancestors 'none'; "
+    "base-uri 'self'"
+)
 
 
 def _init_bootstrap() -> None:
@@ -173,7 +183,15 @@ async def app_lifespan(_app: FastAPI):
     yield
 
 
-app = FastAPI(title="WoL Relay", version="0.1.0", lifespan=app_lifespan)
+_DOCS_ENABLED = Settings().enable_api_docs
+app = FastAPI(
+    title="WoL Relay",
+    version="0.1.0",
+    lifespan=app_lifespan,
+    docs_url="/docs" if _DOCS_ENABLED else None,
+    redoc_url="/redoc" if _DOCS_ENABLED else None,
+    openapi_url="/openapi.json" if _DOCS_ENABLED else None,
+)
 app.include_router(admin_ui_router)
 
 
@@ -182,68 +200,40 @@ def favicon_ico() -> RedirectResponse:
     return RedirectResponse(url="/admin/ui/favicon.png", status_code=307)
 
 
-def _parse_ip(value: str | None) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
-    if not value:
-        return None
-    try:
-        return ipaddress.ip_address(value.strip())
-    except ValueError:
-        return None
-
-
-def _extract_forwarded_ip(request: Request) -> str | None:
-    forwarded_for = request.headers.get("x-forwarded-for")
-    if forwarded_for:
-        first = forwarded_for.split(",")[0].strip()
-        if _parse_ip(first):
-            return first
-    real_ip = request.headers.get("x-real-ip")
-    if real_ip and _parse_ip(real_ip):
-        return real_ip.strip()
-    return None
-
-
-def _is_in_networks(ip_text: str, cidrs: list[str]) -> bool:
-    ip_obj = _parse_ip(ip_text)
-    if not ip_obj:
-        return False
-    for cidr in cidrs:
-        try:
-            if ip_obj in ipaddress.ip_network(cidr, strict=False):
-                return True
-        except ValueError:
-            continue
-    return False
-
-
-def _get_request_ip(request: Request) -> str | None:
-    settings = get_settings()
-    peer_ip = request.client.host if request.client else None
-    if settings.trust_proxy_headers and peer_ip and _is_in_networks(peer_ip, settings.trusted_proxy_cidrs_list):
-        forwarded_ip = _extract_forwarded_ip(request)
-        if forwarded_ip:
-            return forwarded_ip
-    if peer_ip and _parse_ip(peer_ip):
-        return peer_ip
-    return None
-
-
 @app.middleware("http")
 async def allowlist_middleware(request: Request, call_next):
     settings = get_settings()
     if not settings.enforce_ip_allowlist:
         return await call_next(request)
 
-    client_ip = _get_request_ip(request)
+    client_ip = get_request_ip(request, settings)
     if not client_ip:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Missing client IP")
 
-    allowed = _is_in_networks(client_ip, settings.allowed_cidrs)
+    allowed = is_ip_in_networks(client_ip, settings.allowed_cidrs)
 
     if not allowed:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Client IP not allowed")
 
     return await call_next(request)
+
+
+@app.middleware("http")
+async def security_headers_middleware(request: Request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith("/admin/ui"):
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault("Referrer-Policy", "no-referrer")
+        response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+        response.headers.setdefault("Content-Security-Policy", _ADMIN_UI_CSP)
+        if is_https_request(request, get_settings()):
+            response.headers.setdefault("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
+    return response
+
+
+def _get_request_ip(request: Request) -> str | None:
+    return get_request_ip(request, get_settings())
 
 
 def _enforce_rate_limit(

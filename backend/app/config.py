@@ -42,8 +42,9 @@ class Settings(BaseSettings):
         default=30,
         alias="SHUTDOWN_POKE_RESOLVE_RATE_LIMIT_PER_MINUTE",
     )
-    rate_limit_backend: str = Field(default="memory", alias="RATE_LIMIT_BACKEND")
+    rate_limit_backend: str = Field(default="redis", alias="RATE_LIMIT_BACKEND")
     rate_limit_redis_url: str = Field(default="redis://127.0.0.1:6379/0", alias="RATE_LIMIT_REDIS_URL")
+    enable_api_docs: bool = Field(default=False, alias="ENABLE_API_DOCS")
 
     wake_send_max_attempts: int = Field(default=2, alias="WAKE_SEND_MAX_ATTEMPTS")
     wake_send_backoff_ms: int = Field(default=150, alias="WAKE_SEND_BACKOFF_MS")

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import html
-import ipaddress
 import json
 from datetime import UTC, datetime
 from pathlib import Path
@@ -54,6 +53,7 @@ from .db import (
 from .power import run_power_check
 from .password_policy import min_password_length_for_role
 from .rate_limit import get_rate_limiter
+from .request_context import get_request_ip, is_https_request
 from .security import create_token, decode_token, hash_password, verify_password
 from .telemetry import get_counters
 from .wol import normalize_mac, resolve_target, send_magic_packet
@@ -182,7 +182,7 @@ _I18N = {
         "col_within_2m": "Within 2m",
         "placeholder_new_password_optional": "new password (optional)",
         "placeholder_username": "username",
-        "placeholder_password_min12": "password (>=6 user, >=12 admin)",
+        "placeholder_password_min12": "password (>=10 user, >=12 admin)",
         "placeholder_display_name": "display name",
         "placeholder_check_target": "check target",
         "placeholder_check_port": "check port",
@@ -223,7 +223,7 @@ _I18N = {
         "label_link": "Link",
         "alt_invite_qr_code": "Invite QR Code",
         "error_invalid_role": "Invalid role",
-        "error_password_min_length_user": "Password must be at least 6 characters",
+        "error_password_min_length_user": "Password must be at least 10 characters",
         "error_password_min_length_admin": "Admin password must be at least 12 characters",
         "error_admin_promotion_requires_password": "Promoting to admin requires setting a new admin password",
         "error_username_exists": "Username already exists",
@@ -384,7 +384,7 @@ _I18N = {
         "col_within_2m": "Innerhalb von 2 Min.",
         "placeholder_new_password_optional": "Neues Passwort (optional)",
         "placeholder_username": "Benutzername",
-        "placeholder_password_min12": "Passwort (mind. 6 Benutzer, mind. 12 Admin)",
+        "placeholder_password_min12": "Passwort (mind. 10 Benutzer, mind. 12 Admin)",
         "placeholder_display_name": "Anzeigename",
         "placeholder_check_target": "Prüfziel",
         "placeholder_check_port": "Prüfport",
@@ -425,7 +425,7 @@ _I18N = {
         "label_link": "Link",
         "alt_invite_qr_code": "Einladungs-QR-Code",
         "error_invalid_role": "Ungültige Rolle",
-        "error_password_min_length_user": "Passwort muss mindestens 6 Zeichen haben",
+        "error_password_min_length_user": "Passwort muss mindestens 10 Zeichen haben",
         "error_password_min_length_admin": "Admin-Passwort muss mindestens 12 Zeichen haben",
         "error_admin_promotion_requires_password": "Für die Beförderung zum Admin muss ein neues Admin-Passwort gesetzt werden",
         "error_username_exists": "Benutzername existiert bereits",
@@ -509,12 +509,13 @@ def _lang_switch_url(request: Request, lang: str) -> str:
 def _apply_lang_cookie(request: Request, response: HTMLResponse | RedirectResponse, lang: str | None = None) -> None:
     resolved = lang or _lang(request)
     if request.cookies.get("admin_ui_lang") != resolved:
+        settings = get_settings()
         response.set_cookie(
             "admin_ui_lang",
             resolved,
             max_age=60 * 60 * 24 * 365,
             samesite="lax",
-            secure=request.url.scheme == "https",
+            secure=is_https_request(request, settings),
             path="/admin/ui",
         )
 
@@ -561,50 +562,8 @@ def _safe_next_path(next_path: str | None) -> str:
     return candidate
 
 
-def _parse_ip(value: str | None) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
-    if not value:
-        return None
-    try:
-        return ipaddress.ip_address(value.strip())
-    except ValueError:
-        return None
-
-
-def _is_in_networks(ip_text: str, cidrs: list[str]) -> bool:
-    ip_obj = _parse_ip(ip_text)
-    if not ip_obj:
-        return False
-    for cidr in cidrs:
-        try:
-            if ip_obj in ipaddress.ip_network(cidr, strict=False):
-                return True
-        except ValueError:
-            continue
-    return False
-
-
-def _extract_forwarded_ip(request: Request) -> str | None:
-    forwarded_for = request.headers.get("x-forwarded-for")
-    if forwarded_for:
-        first = forwarded_for.split(",")[0].strip()
-        if _parse_ip(first):
-            return first
-    real_ip = request.headers.get("x-real-ip")
-    if real_ip and _parse_ip(real_ip):
-        return real_ip.strip()
-    return None
-
-
 def _login_ip_key(request: Request) -> str:
-    settings = get_settings()
-    peer_ip = request.client.host if request.client else None
-    if settings.trust_proxy_headers and peer_ip and _is_in_networks(peer_ip, settings.trusted_proxy_cidrs_list):
-        forwarded = _extract_forwarded_ip(request)
-        if forwarded:
-            return forwarded
-    if peer_ip and _parse_ip(peer_ip):
-        return peer_ip
-    return "unknown"
+    return get_request_ip(request, get_settings()) or "unknown"
 
 
 def _is_login_rate_limited(request: Request) -> bool:
@@ -1123,7 +1082,7 @@ def login_submit(
         token,
         httponly=True,
         samesite="strict",
-        secure=request.url.scheme == "https",
+        secure=is_https_request(request, get_settings()),
         path="/admin/ui",
     )
     _apply_lang_cookie(request, response, resolved_lang)

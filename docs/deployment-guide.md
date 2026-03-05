@@ -347,8 +347,8 @@ python3 backend/scripts/restore_db.py backups/<backup-file>.db --force
 
 ## 13. Horizontal Scaling Note
 
-- Default `RATE_LIMIT_BACKEND=memory` is process-local and suitable for a single backend instance.
-- For multiple backend instances, run with shared Redis (`RATE_LIMIT_BACKEND=redis`, same `RATE_LIMIT_REDIS_URL` on all instances).
+- Default `RATE_LIMIT_BACKEND=redis` enables durable/shared limits.
+- `RATE_LIMIT_BACKEND=memory` remains available for simple single-instance setups but is process-local.
 
 ## 14. Common Failure Patterns
 

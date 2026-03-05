@@ -237,3 +237,40 @@ def test_admin_ui_login_rate_limit_enforced(client):
         assert "Too many login attempts" in blocked.text
     finally:
         settings.login_rate_limit_per_minute = old_limit
+
+
+def test_admin_ui_sets_security_headers(client):
+    response = client.get("/admin/ui/login")
+    assert response.status_code == 200
+    assert response.headers.get("x-content-type-options") == "nosniff"
+    assert response.headers.get("x-frame-options") == "DENY"
+    assert response.headers.get("referrer-policy") == "no-referrer"
+    assert "frame-ancestors 'none'" in response.headers.get("content-security-policy", "")
+
+
+def test_admin_ui_login_cookie_secure_with_trusted_forwarded_proto(client):
+    settings = get_settings()
+    old_trust_proxy_headers = settings.trust_proxy_headers
+    try:
+        settings.trust_proxy_headers = True
+        response = client.post(
+            "/admin/ui/login",
+            data={"username": "admin", "password": "adminpass123456", "next": "/admin/ui/users"},
+            headers={"x-forwarded-proto": "https"},
+            follow_redirects=False,
+        )
+        assert response.status_code == 303
+        assert "secure" in response.headers.get("set-cookie", "").lower()
+    finally:
+        settings.trust_proxy_headers = old_trust_proxy_headers
+
+
+def test_admin_ui_login_cookie_does_not_trust_proto_header_by_default(client):
+    response = client.post(
+        "/admin/ui/login",
+        data={"username": "admin", "password": "adminpass123456", "next": "/admin/ui/users"},
+        headers={"x-forwarded-proto": "https"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert "secure" not in response.headers.get("set-cookie", "").lower()
