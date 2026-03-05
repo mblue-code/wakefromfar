@@ -63,7 +63,7 @@ def test_admin_ui_login_and_crud_paths(client):
     assert "uiuser" in users_page_after.text
 
 
-def test_admin_ui_invite_and_test_power_check(client, monkeypatch):
+def test_admin_ui_manual_provisioning_and_test_power_check(client, monkeypatch):
     # login via UI
     login_res = client.post(
         "/admin/ui/login",
@@ -137,7 +137,7 @@ def test_admin_ui_invite_and_test_power_check(client, monkeypatch):
     assert power_logs.status_code == 200
     assert device_id in power_logs.text
 
-    # create invite from UI and ensure QR/link are rendered
+    # invite flow is disabled and redirects to users page.
     create_user = client.post(
         "/admin/ui/users/create",
         data={"username": "invitee", "password": "inviteepassword1", "role": "user"},
@@ -147,11 +147,11 @@ def test_admin_ui_invite_and_test_power_check(client, monkeypatch):
 
     invite_res = client.post(
         "/admin/ui/invites/create",
-        data={"username": "invitee", "backend_url_hint": "http://relay.local:8080", "expires_in_hours": "12"},
+        data={"username": "invitee"},
+        follow_redirects=False,
     )
-    assert invite_res.status_code == 200
-    assert "wakefromfar://claim?token=" in invite_res.text
-    assert "quickchart.io/qr" in invite_res.text
+    assert invite_res.status_code == 303
+    assert invite_res.headers["location"].startswith("/admin/ui/users?")
 
 
 def test_admin_ui_german_language_switch(client):

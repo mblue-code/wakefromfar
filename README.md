@@ -83,14 +83,14 @@ Initialer Admin wird aus ENV angelegt (`ADMIN_USER`, `ADMIN_PASS`), falls User n
 
 - URL: `http://localhost:8080/admin/ui/login`
 - Login mit Admin-User (`ADMIN_USER` / `ADMIN_PASS` oder API-angelegter Admin).
+- User-Onboarding läuft manuell: Admin erstellt Benutzerkonten und übermittelt URL + Zugangsdaten sicher an Nutzer.
 - Verfügbare Seiten:
   - Users CRUD
   - Devices CRUD inkl. "Test Power Check"
   - Assignments
-  - Invite-Generierung inkl. Deep-Link + QR
   - Wake- und Power-Check-Logs mit Filtern
   - Discovery Wizard (Netzwerke scannen, Kandidaten validieren, in Devices importieren)
-  - Diagnostics, Audit Logs, Metrics, Pilot Metrics (Sprint 3)
+  - Diagnostics, Audit Logs, Metrics (Sprint 3)
 
 ### Hardening / Sprint 3
 
@@ -99,7 +99,6 @@ Zusätzliche Admin-APIs:
 - `GET /admin/audit-logs`
 - `GET /admin/metrics`
 - `GET /admin/diagnostics/devices`
-- `GET /admin/pilot-metrics`
 - Discovery:
   - `GET /admin/discovery/networks`
   - `GET/POST /admin/discovery/runs`
@@ -168,7 +167,6 @@ docker compose exec wol-backend python -m app.cli add-host --name Proxmox --mac 
 ## 3. API (MVP)
 
 - `POST /auth/login`
-- `POST /onboarding/claim`
 - `GET /me/devices` (auth)
 - `POST /me/devices/{id}/wake` (auth)
 - `POST /me/devices/{id}/power-check` (auth)
@@ -177,7 +175,6 @@ docker compose exec wol-backend python -m app.cli add-host --name Proxmox --mac 
 - `GET/POST/PATCH/DELETE /admin/users` (admin)
 - `GET/POST/PATCH/DELETE /admin/devices` (admin)
 - `GET/POST/DELETE /admin/assignments` (admin)
-- `GET/POST /admin/invites` + `POST /admin/invites/{id}/revoke` (admin)
 - `GET /admin/wake-logs`, `GET /admin/power-check-logs` (admin)
 - `GET /admin/mobile/events` (admin, compact mobile activity feed with optional `cursor`, `limit`, `type`)
 - `GET /admin/shutdown-pokes`, `POST /admin/shutdown-pokes/{id}/seen`, `POST /admin/shutdown-pokes/{id}/resolve` (admin)

@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-import hashlib
 import html
 import ipaddress
 import json
-import secrets
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
-from urllib.parse import quote_plus, urlencode, urlparse
+from urllib.parse import urlencode, urlparse
 
 from fastapi import APIRouter, BackgroundTasks, Form, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
@@ -23,7 +21,6 @@ from .db import (
     create_host,
     create_discovery_candidate,
     create_discovery_run,
-    create_invite_token,
     create_user,
     delete_host,
     delete_user,
@@ -40,9 +37,7 @@ from .db import (
     list_admin_audit_logs,
     list_assignments,
     list_hosts,
-    list_invite_tokens,
     list_power_check_logs,
-    list_successful_wakes,
     list_users,
     list_wake_logs,
     log_admin_action,
@@ -51,7 +46,6 @@ from .db import (
     mark_discovery_candidate_imported,
     mark_discovery_run_running,
     remove_assignment,
-    revoke_invite,
     update_host,
     update_host_power_state,
     update_user_password_by_id,
@@ -674,7 +668,6 @@ def _layout(request: Request, title: str, body: str, admin_username: str, messag
         {_nav('/admin/ui/users', t('nav_users'))}
         {_nav('/admin/ui/devices', t('nav_devices'))}
         {_nav('/admin/ui/assignments', t('nav_assignments'))}
-        {_nav('/admin/ui/invites', t('nav_invites'))}
         <div class="nav-sep"></div>
         {_nav('/admin/ui/wake-logs', t('nav_wake_logs'))}
         {_nav('/admin/ui/power-check-logs', t('nav_power_logs'))}
@@ -683,7 +676,6 @@ def _layout(request: Request, title: str, body: str, admin_username: str, messag
         {_nav('/admin/ui/diagnostics', t('nav_diagnostics'))}
         {_nav('/admin/ui/discovery', t('nav_discovery'))}
         {_nav('/admin/ui/metrics', t('nav_metrics'))}
-        {_nav('/admin/ui/pilot-metrics', t('nav_pilot_metrics'))}
       </nav>
     </aside>"""
 
@@ -1171,7 +1163,6 @@ def dashboard(request: Request):
       <article class="stat-card"><strong class="stat-number">{len(users)}</strong><span class="stat-label">{t("card_users")}</span></article>
       <article class="stat-card"><strong class="stat-number">{len(devices)}</strong><span class="stat-label">{t("card_devices")}</span></article>
       <article class="stat-card"><strong class="stat-number">{len(assignments)}</strong><span class="stat-label">{t("card_assignments")}</span></article>
-      <article class="stat-card"><strong class="stat-number">{len(list_invite_tokens(limit=500))}</strong><span class="stat-label">{t("card_invites")}</span></article>
     </div>
     <h2>{t("heading_recent_wake_logs")}</h2>
     <figure><table>
@@ -1616,110 +1607,31 @@ def assignments_delete(request: Request, user_id: int, device_id: str):
     return _redirect("/admin/ui/assignments", message=t("msg_assignment_removed"), request=request)
 
 
-def _render_invites_page(
-    request: Request,
-    admin_username: str,
-    message: str | None,
-    error: str | None,
-    created_token: str | None = None,
-    created_link: str | None = None,
-):
-    t = lambda key, **kwargs: _tr(request, key, **kwargs)
-    invites = list_invite_tokens(limit=300)
-    rows = "".join(
-        f"""
-        <tr>
-          <td>{_esc(row['id'])}</td><td>{_esc(row['username'])}</td><td>{_esc(row['backend_url_hint'])}</td>
-          <td>{_esc(row['expires_at'])}</td><td>{_esc(row['claimed_at'])}</td><td>{_esc(row['created_by'])}</td>
-          <td><form method="post" action="/admin/ui/invites/{_esc(row['id'])}/revoke" data-confirm="{_esc(t('confirm_revoke_invite'))}"><button type="submit" class="secondary">{t("action_revoke")}</button></form></td>
-        </tr>
-        """
-        for row in invites
-    )
-    created_section = ""
-    if created_token and created_link:
-        qr_url = f"https://quickchart.io/qr?size=240&text={quote_plus(created_link)}"
-        created_section = f"""
-        <article>
-          <h3>{t("heading_new_invite")}</h3>
-          <p><strong>{t("label_token")}:</strong> <code>{_esc(created_token)}</code></p>
-          <p><strong>{t("label_link")}:</strong> <code>{_esc(created_link)}</code></p>
-          <img src="{_esc(qr_url)}" alt="{t("alt_invite_qr_code")}" style="margin-top:.5rem" />
-        </article>
-        """
-    users = list_users()
-    user_opts = "".join(f'<option value="{_esc(row["username"])}">{_esc(row["username"])}</option>' for row in users)
-    body = f"""
-    {created_section}
-    <h2>{t("heading_create_invite")}</h2>
-    <form method="post" action="/admin/ui/invites/create" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:1.5rem;">
-      <select name="username">{user_opts}</select>
-      <input name="backend_url_hint" placeholder="{t("placeholder_backend_url_hint_optional")}" />
-      <input name="expires_in_hours" value="72" placeholder="{t("placeholder_hours")}" />
-      <button type="submit">{t("action_create_invite")}</button>
-    </form>
-    <h2>{t("heading_invites")}</h2>
-    <figure><table>
-      <thead><tr><th>{t("col_id")}</th><th>{t("col_username")}</th><th>{t("col_backend_hint")}</th><th>{t("col_expires_at")}</th><th>{t("col_claimed_at")}</th><th>{t("col_created_by")}</th><th>{t("col_action")}</th></tr></thead>
-      <tbody>{rows}</tbody>
-    </table></figure>
-    """
-    return _layout(request, t("title_invites"), body, admin_username, message=message, error=error)
-
-
 @router.get("/invites", response_class=HTMLResponse)
 def invites_page(request: Request):
     admin = _require_admin_or_redirect(request)
     if isinstance(admin, RedirectResponse):
         return admin
-    message, error = _msg(request)
-    return _render_invites_page(request, admin["username"], message, error)
+    return _redirect(
+        "/admin/ui/users",
+        error="Invite workflow is disabled. Create users manually and share credentials securely.",
+        request=request,
+    )
 
 
 @router.post("/invites/create", response_class=HTMLResponse)
 def invites_create(
     request: Request,
     username: str = Form(...),
-    backend_url_hint: str = Form(""),
-    expires_in_hours: int = Form(72),
 ):
     admin = _require_admin_or_redirect(request)
     if isinstance(admin, RedirectResponse):
         return admin
-    t = lambda key, **kwargs: _tr(request, key, **kwargs)
-    user = get_user_by_username(username)
-    if not user:
-        return _render_invites_page(request, admin["username"], None, t("error_username_not_found"))
-    if expires_in_hours < 1 or expires_in_hours > 24 * 30:
-        return _render_invites_page(request, admin["username"], None, t("error_expires_in_hours_range"))
-    raw_token = secrets.token_urlsafe(24)
-    token_hash = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
-    invite_id = secrets.token_hex(16)
-    expires_at = datetime.now(UTC) + timedelta(hours=expires_in_hours)
-    create_invite_token(
-        invite_id=invite_id,
-        token_hash=token_hash,
-        username=username,
-        backend_url_hint=backend_url_hint or None,
-        expires_at=expires_at.isoformat(),
-        created_by=admin["username"],
-    )
-    log_admin_action(
-        actor_username=admin["username"],
-        action="ui_create_invite",
-        target_type="invite",
-        target_id=invite_id,
-        detail=f"username={username}",
-    )
-    hint = backend_url_hint.strip() or f"{request.url.scheme}://{request.url.netloc}"
-    link = f"wakefromfar://claim?token={quote_plus(raw_token)}&backend_url_hint={quote_plus(hint)}"
-    return _render_invites_page(
-        request,
-        admin["username"],
-        message=t("msg_invite_created_for", username=username),
-        error=None,
-        created_token=raw_token,
-        created_link=link,
+    del username
+    return _redirect(
+        "/admin/ui/users",
+        error="Invite workflow is disabled. Create users manually and share credentials securely.",
+        request=request,
     )
 
 
@@ -1728,17 +1640,12 @@ def invites_revoke(request: Request, invite_id: str):
     admin = _require_admin_or_redirect(request)
     if isinstance(admin, RedirectResponse):
         return admin
-    t = lambda key, **kwargs: _tr(request, key, **kwargs)
-    if not revoke_invite(invite_id):
-        return _redirect("/admin/ui/invites", error=t("error_invite_not_found_or_claimed"), request=request)
-    log_admin_action(
-        actor_username=admin["username"],
-        action="ui_revoke_invite",
-        target_type="invite",
-        target_id=invite_id,
-        detail=None,
+    del invite_id
+    return _redirect(
+        "/admin/ui/users",
+        error="Invite workflow is disabled. Create users manually and share credentials securely.",
+        request=request,
     )
-    return _redirect("/admin/ui/invites", message=t("msg_invite_revoked"), request=request)
 
 
 @router.get("/wake-logs", response_class=HTMLResponse)
@@ -2339,49 +2246,8 @@ def pilot_metrics_page(request: Request):
     admin = _require_admin_or_redirect(request)
     if isinstance(admin, RedirectResponse):
         return admin
-    t = lambda key, **kwargs: _tr(request, key, **kwargs)
-    claimed_invites = [row for row in list_invite_tokens(limit=5000) if row["claimed_at"]]
-    successful_wakes = list_successful_wakes(limit=20000)
-
-    first_success_by_user: dict[str, str] = {}
-    for row in successful_wakes:
-        actor = str(row["actor_username"])
-        if actor not in first_success_by_user:
-            first_success_by_user[actor] = str(row["created_at"])
-
-    total_claimed = len(claimed_invites)
-    within_two_minutes = 0
-    details_rows: list[str] = []
-    for invite in claimed_invites:
-        username = str(invite["username"])
-        claimed_at = datetime.fromisoformat(str(invite["claimed_at"]))
-        if claimed_at.tzinfo is None:
-            claimed_at = claimed_at.replace(tzinfo=UTC)
-        first_success_raw = first_success_by_user.get(username)
-        duration = None
-        within = False
-        if first_success_raw:
-            first_success = datetime.fromisoformat(first_success_raw)
-            if first_success.tzinfo is None:
-                first_success = first_success.replace(tzinfo=UTC)
-            duration = (first_success - claimed_at).total_seconds()
-            within = duration <= 120
-            if within:
-                within_two_minutes += 1
-        details_rows.append(
-            f"<tr><td>{_esc(username)}</td><td>{_esc(invite['claimed_at'])}</td><td>{_esc(first_success_raw)}</td><td>{_esc(duration)}</td><td>{t('value_yes') if within else t('value_no')}</td></tr>"
-        )
-
-    rate = (within_two_minutes / total_claimed) if total_claimed else 0.0
-    body = f"""
-    <h2>{t("heading_pilot_metrics")}</h2>
-    <p>{t("text_total_claimed_users")}: <strong>{total_claimed}</strong></p>
-    <p>{t("text_users_first_success_2m")}: <strong>{within_two_minutes}</strong></p>
-    <p>{t("text_completion_rate_2m")}: <strong>{rate:.2%}</strong> ({t("text_target_90")})</p>
-    <figure><table>
-      <thead><tr><th>{t("col_username")}</th><th>{t("col_claimed_at")}</th><th>{t("col_first_successful_wake")}</th><th>{t("col_seconds")}</th><th>{t("col_within_2m")}</th></tr></thead>
-      <tbody>{''.join(details_rows)}</tbody>
-    </table></figure>
-    """
-    message, error = _msg(request)
-    return _layout(request, t("title_pilot_metrics"), body, admin["username"], message=message, error=error)
+    return _redirect(
+        "/admin/ui/users",
+        error="Pilot metrics are unavailable because invite onboarding was removed.",
+        request=request,
+    )

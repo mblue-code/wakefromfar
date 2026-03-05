@@ -5,7 +5,7 @@ from app.power import PowerCheckResult
 from .conftest import auth_headers, login
 
 
-def test_onboarding_claim_flow(client):
+def test_manual_user_provisioning_flow(client):
     admin_token = login(client, "admin", "adminpass123456")
     admin_h = auth_headers(admin_token)
 
@@ -16,65 +16,32 @@ def test_onboarding_claim_flow(client):
     )
     assert create_user_res.status_code == 201, create_user_res.text
 
-    invite_res = client.post(
-        "/admin/invites",
-        headers=admin_h,
-        json={"username": "eve", "backend_url_hint": "http://relay.internal", "expires_in_hours": 4},
-    )
-    assert invite_res.status_code == 201, invite_res.text
-    invite_token = invite_res.json()["token"]
-
-    claim_res = client.post(
-        "/onboarding/claim",
-        json={"token": invite_token, "password": "newclaimedpass12"},
-    )
-    assert claim_res.status_code == 200, claim_res.text
-    claim_payload = claim_res.json()
-    assert claim_payload["username"] == "eve"
-    assert claim_payload["role"] == "user"
-    assert claim_payload["backend_url_hint"] == "http://relay.internal"
-    assert claim_payload["token"]
-
-    # Claimed password is now valid for normal login.
-    eve_token = login(client, "eve", "newclaimedpass12")
+    # Manual credentials are immediately valid for normal login.
+    eve_token = login(client, "eve", "initialpassword12")
     assert eve_token
 
-    double_claim_res = client.post(
+    onboarding_res = client.post(
         "/onboarding/claim",
-        json={"token": invite_token, "password": "anothernewpass12"},
+        json={"token": "unused", "password": "anothernewpass12"},
     )
-    assert double_claim_res.status_code == 409
+    assert onboarding_res.status_code == 410
 
 
-def test_onboarding_does_not_change_password_when_claim_fails(client, monkeypatch):
+def test_invite_endpoints_are_disabled(client):
     admin_token = login(client, "admin", "adminpass123456")
     admin_h = auth_headers(admin_token)
-
-    create_user_res = client.post(
-        "/admin/users",
-        headers=admin_h,
-        json={"username": "eve-race", "password": "initialpassword12", "role": "user"},
-    )
-    assert create_user_res.status_code == 201, create_user_res.text
-
-    invite_res = client.post(
+    create_invite_res = client.post(
         "/admin/invites",
         headers=admin_h,
-        json={"username": "eve-race", "backend_url_hint": "http://relay.internal", "expires_in_hours": 4},
+        json={"username": "admin", "backend_url_hint": "http://relay.internal", "expires_in_hours": 4},
     )
-    assert invite_res.status_code == 201, invite_res.text
-    invite_token = invite_res.json()["token"]
+    assert create_invite_res.status_code == 410
 
-    monkeypatch.setattr("app.main.claim_invite", lambda *_args, **_kwargs: False)
-    claim_res = client.post(
-        "/onboarding/claim",
-        json={"token": invite_token, "password": "newclaimedpass12"},
-    )
-    assert claim_res.status_code == 409
+    list_invites_res = client.get("/admin/invites", headers=admin_h)
+    assert list_invites_res.status_code == 410
 
-    # Original password must still be valid when claim fails.
-    eve_token = login(client, "eve-race", "initialpassword12")
-    assert eve_token
+    revoke_invite_res = client.post("/admin/invites/legacy-id/revoke", headers=admin_h)
+    assert revoke_invite_res.status_code == 410
 
 
 def test_admin_user_and_device_patch_delete(client):

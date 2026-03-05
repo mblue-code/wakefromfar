@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-import hashlib
 import ipaddress
 import json
-import secrets
 import time
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Annotated, Literal
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request, status
@@ -18,9 +16,7 @@ from .config import get_settings
 from .diagnostics import device_diagnostic_hints
 from .db import (
     assign_device_to_user,
-    claim_invite,
     count_admin_users,
-    create_invite_token,
     create_host,
     create_discovery_candidate,
     create_discovery_run,
@@ -35,23 +31,19 @@ from .db import (
     get_discovery_run,
     get_host_by_mac,
     get_host_by_id,
-    get_invite_by_hash,
     get_shutdown_poke_request,
     get_user_by_id,
     get_user_by_username,
     init_db,
     list_admin_audit_logs,
     list_assignments,
-    list_claimed_invites,
     list_discovery_candidates,
     list_discovery_events,
     list_discovery_runs,
     list_activity_events,
     list_shutdown_poke_requests,
     list_hosts,
-    list_invite_tokens,
     list_power_check_logs,
-    list_successful_wakes,
     list_users,
     list_wake_logs,
     list_assigned_hosts,
@@ -64,11 +56,9 @@ from .db import (
     mark_shutdown_poke_resolved,
     mark_shutdown_poke_seen,
     remove_assignment,
-    revoke_invite,
     complete_discovery_run,
     update_host,
     update_host_power_state,
-    update_user_password,
     update_user_password_by_id,
     update_user_role,
     upsert_admin,
@@ -101,15 +91,10 @@ from .schemas import (
     DiscoveryRunOut,
     DiscoveryValidateResponse,
     HostOut,
-    InviteCreate,
-    InviteCreateResponse,
-    InviteOut,
     LoginRequest,
     LoginResponse,
     MeWakeResponse,
     MyDeviceOut,
-    OnboardingClaimRequest,
-    OnboardingClaimResponse,
     PowerCheckResponse,
     ShutdownPokeCreateRequest,
     ShutdownPokeOut,
@@ -797,67 +782,11 @@ def login(body: LoginRequest, request: Request) -> LoginResponse:
     return LoginResponse(token=token, expires_in=expires_in)
 
 
-@app.post("/onboarding/claim", response_model=OnboardingClaimResponse)
-def onboarding_claim(body: OnboardingClaimRequest, request: Request) -> OnboardingClaimResponse:
-    settings = get_settings()
-    ip = _get_request_ip(request) or "unknown"
-    _enforce_rate_limit(
-        "onboarding",
-        ip,
-        settings.onboarding_rate_limit_per_minute,
-        "Too many onboarding attempts",
-    )
-    token_hash = hashlib.sha256(body.token.encode("utf-8")).hexdigest()
-    invite = get_invite_by_hash(token_hash)
-    if not invite:
-        increment_counter("onboarding.failed")
-        structured_log("onboarding.failed", ip=ip, reason="invite_not_found")
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invite token not found")
-    if invite["claimed_at"]:
-        increment_counter("onboarding.failed")
-        structured_log("onboarding.failed", ip=ip, reason="invite_already_claimed")
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Invite token already claimed")
-
-    now = datetime.now(UTC)
-    expires_at = datetime.fromisoformat(invite["expires_at"])
-    if expires_at.tzinfo is None:
-        expires_at = expires_at.replace(tzinfo=UTC)
-    if now > expires_at:
-        increment_counter("onboarding.failed")
-        structured_log("onboarding.failed", ip=ip, reason="invite_expired")
-        raise HTTPException(status_code=status.HTTP_410_GONE, detail="Invite token expired")
-
-    user = get_user_by_username(invite["username"])
-    if not user:
-        increment_counter("onboarding.failed")
-        structured_log("onboarding.failed", ip=ip, reason="invite_user_not_found")
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invite user not found")
-
-    claimed = claim_invite(invite_id=invite["id"], claimed_at=now.isoformat())
-    if not claimed:
-        increment_counter("onboarding.failed")
-        structured_log("onboarding.failed", ip=ip, reason="claim_race", username=user["username"])
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Invite token already claimed")
-    updated = update_user_password(username=user["username"], password_hash=hash_password(body.password))
-    if not updated:
-        increment_counter("onboarding.failed")
-        structured_log(
-            "onboarding.failed",
-            ip=ip,
-            reason="password_update_failed_after_claim",
-            username=user["username"],
-        )
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Could not set password")
-
-    token, expires_in = create_token(username=user["username"], role=user["role"])
-    increment_counter("onboarding.success")
-    structured_log("onboarding.success", ip=ip, username=user["username"])
-    return OnboardingClaimResponse(
-        token=token,
-        expires_in=expires_in,
-        username=user["username"],
-        role=user["role"],
-        backend_url_hint=invite["backend_url_hint"],
+@app.post("/onboarding/claim")
+def onboarding_claim_disabled() -> dict[str, str]:
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail="Invite onboarding is disabled. Ask your admin for credentials and backend URL.",
     )
 
 
@@ -1517,82 +1446,32 @@ def admin_delete_assignment(
     return {"ok": True}
 
 
-@app.post("/admin/invites", status_code=status.HTTP_201_CREATED, response_model=InviteCreateResponse)
-def admin_create_invite(
-    body: InviteCreate,
-    current_user: Annotated[dict, Depends(require_admin)],
-) -> InviteCreateResponse:
-    user = get_user_by_username(body.username)
-    if not user:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Username not found")
-
-    raw_token = secrets.token_urlsafe(24)
-    token_hash = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
-    invite_id = secrets.token_hex(16)
-    now = datetime.now(UTC)
-    expires_at = now + timedelta(hours=body.expires_in_hours)
-    create_invite_token(
-        invite_id=invite_id,
-        token_hash=token_hash,
-        username=body.username,
-        backend_url_hint=body.backend_url_hint,
-        expires_at=expires_at.isoformat(),
-        created_by=current_user["username"],
-    )
-    log_admin_action(
-        actor_username=current_user["username"],
-        action="create_invite",
-        target_type="invite",
-        target_id=invite_id,
-        detail=f"username={body.username}",
-    )
-    increment_counter("admin_action.create_invite")
-    return InviteCreateResponse(
-        id=invite_id,
-        token=raw_token,
-        username=body.username,
-        backend_url_hint=body.backend_url_hint,
-        expires_at=expires_at,
-        claimed_at=None,
-        created_by=current_user["username"],
-        created_at=now,
+@app.post("/admin/invites")
+def admin_create_invite_disabled(_: Annotated[dict, Depends(require_admin)]) -> dict[str, str]:
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail="Invite management is disabled. Create users manually and share credentials securely.",
     )
 
 
-@app.get("/admin/invites", response_model=list[InviteOut])
-def admin_list_invites(_: Annotated[dict, Depends(require_admin)]) -> list[InviteOut]:
-    rows = list_invite_tokens()
-    return [
-        InviteOut(
-            id=row["id"],
-            username=row["username"],
-            backend_url_hint=row["backend_url_hint"],
-            expires_at=row["expires_at"],
-            claimed_at=row["claimed_at"],
-            created_by=row["created_by"],
-            created_at=row["created_at"],
-        )
-        for row in rows
-    ]
+@app.get("/admin/invites")
+def admin_list_invites_disabled(_: Annotated[dict, Depends(require_admin)]) -> dict[str, str]:
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail="Invite management is disabled. Create users manually and share credentials securely.",
+    )
 
 
 @app.post("/admin/invites/{invite_id}/revoke")
-def admin_revoke_invite(
+def admin_revoke_invite_disabled(
     invite_id: str,
-    current_user: Annotated[dict, Depends(require_admin)],
-) -> dict[str, bool]:
-    revoked = revoke_invite(invite_id)
-    if not revoked:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invite not found or already claimed")
-    log_admin_action(
-        actor_username=current_user["username"],
-        action="revoke_invite",
-        target_type="invite",
-        target_id=invite_id,
-        detail=None,
+    _: Annotated[dict, Depends(require_admin)],
+) -> dict[str, str]:
+    del invite_id
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail="Invite management is disabled. Create users manually and share credentials securely.",
     )
-    increment_counter("admin_action.revoke_invite")
-    return {"ok": True}
 
 
 @app.get("/admin/mobile/events", response_model=list[ActivityEventOut])
@@ -2053,68 +1932,9 @@ def admin_network_diagnostics(_: Annotated[dict, Depends(require_admin)]) -> dic
     return _NETWORK_DIAGNOSTICS
 
 
-def _parse_iso_dt(value: str | None) -> datetime | None:
-    if not value:
-        return None
-    try:
-        dt = datetime.fromisoformat(value)
-    except ValueError:
-        return None
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=UTC)
-    return dt
-
-
 @app.get("/admin/pilot-metrics")
-def admin_pilot_metrics(_: Annotated[dict, Depends(require_admin)]) -> dict:
-    claimed = list_claimed_invites(limit=5000)
-    successful_wakes = list_successful_wakes(limit=20000)
-
-    first_success_by_user: dict[str, datetime] = {}
-    for row in successful_wakes:
-        created = _parse_iso_dt(row["created_at"])
-        if created is None:
-            continue
-        actor = str(row["actor_username"])
-        if actor not in first_success_by_user:
-            first_success_by_user[actor] = created
-
-    total_claimed = 0
-    success_within_2m = 0
-    durations: list[float] = []
-    per_user: list[dict] = []
-    for row in claimed:
-        username = str(row["username"])
-        claimed_at = _parse_iso_dt(row["claimed_at"])
-        if claimed_at is None:
-            continue
-        total_claimed += 1
-        first_success = first_success_by_user.get(username)
-        duration_seconds: float | None = None
-        within_2m = False
-        if first_success and first_success >= claimed_at:
-            duration_seconds = (first_success - claimed_at).total_seconds()
-            durations.append(duration_seconds)
-            within_2m = duration_seconds <= 120
-            if within_2m:
-                success_within_2m += 1
-        per_user.append(
-            {
-                "username": username,
-                "claimed_at": row["claimed_at"],
-                "first_successful_wake_at": first_success.isoformat() if first_success else None,
-                "first_success_seconds": duration_seconds,
-                "within_two_minutes": within_2m,
-            }
-        )
-
-    completion_rate = (success_within_2m / total_claimed) if total_claimed else 0.0
-    avg_seconds = (sum(durations) / len(durations)) if durations else None
-    return {
-        "total_claimed_users": total_claimed,
-        "users_with_first_success_within_two_minutes": success_within_2m,
-        "completion_rate_within_two_minutes": completion_rate,
-        "target_met": completion_rate >= 0.9 if total_claimed else False,
-        "average_seconds_to_first_success": avg_seconds,
-        "users": per_user,
-    }
+def admin_pilot_metrics_disabled(_: Annotated[dict, Depends(require_admin)]) -> dict[str, str]:
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail="Pilot metrics are disabled because invite onboarding has been removed.",
+    )

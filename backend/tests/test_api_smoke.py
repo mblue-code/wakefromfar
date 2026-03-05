@@ -62,16 +62,13 @@ def test_new_endpoints_smoke(client, monkeypatch):
         headers=admin_h,
         json={"username": "bob", "backend_url_hint": "http://relay.local", "expires_in_hours": 12},
     )
-    assert invite_res.status_code == 201, invite_res.text
-    invite_id = invite_res.json()["id"]
-    assert invite_res.json()["token"]
+    assert invite_res.status_code == 410, invite_res.text
 
     invites_res = client.get("/admin/invites", headers=admin_h)
-    assert invites_res.status_code == 200, invites_res.text
-    assert any(row["id"] == invite_id for row in invites_res.json())
+    assert invites_res.status_code == 410, invites_res.text
 
-    revoke_res = client.post(f"/admin/invites/{invite_id}/revoke", headers=admin_h)
-    assert revoke_res.status_code == 200, revoke_res.text
+    revoke_res = client.post("/admin/invites/legacy-id/revoke", headers=admin_h)
+    assert revoke_res.status_code == 410, revoke_res.text
 
     user_token = login(client, "bob", "bobpassword1234")
     user_h = auth_headers(user_token)

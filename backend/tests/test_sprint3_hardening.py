@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from app.config import get_settings
 from app.power import PowerCheckResult
 
 from .conftest import auth_headers, login
@@ -68,19 +67,9 @@ def test_wake_rate_limit_enforced(client, monkeypatch):
     settings.wake_rate_limit_per_minute = old_limit
 
 
-def test_onboarding_rate_limit_enforced(client):
-    settings = get_settings()
-    old_limit = settings.onboarding_rate_limit_per_minute
-    settings.onboarding_rate_limit_per_minute = 1
-
-    first = client.post("/onboarding/claim", json={"token": "not-a-real-token", "password": "newpassword1234"})
-    assert first.status_code == 404
-
-    second = client.post("/onboarding/claim", json={"token": "not-a-real-token", "password": "newpassword1234"})
-    assert second.status_code == 429
-    assert second.json()["detail"] == "Too many onboarding attempts"
-
-    settings.onboarding_rate_limit_per_minute = old_limit
+def test_onboarding_endpoint_is_disabled(client):
+    response = client.post("/onboarding/claim", json={"token": "not-a-real-token", "password": "newpassword1234"})
+    assert response.status_code == 410
 
 
 def test_audit_logs_metrics_and_diagnostics(client):
@@ -134,37 +123,7 @@ def test_audit_logs_metrics_and_diagnostics(client):
     assert "has_multiple_active_networks" in net_payload
 
 
-def test_pilot_metrics_report(client, monkeypatch):
-    admin_h, user_id, device_id = _setup_user_and_device(client, username="pilot-user")
-
-    invite_res = client.post(
-        "/admin/invites",
-        headers=admin_h,
-        json={"username": "pilot-user", "backend_url_hint": "http://relay.local", "expires_in_hours": 4},
-    )
-    assert invite_res.status_code == 201, invite_res.text
-    invite_token = invite_res.json()["token"]
-
-    claim_res = client.post(
-        "/onboarding/claim",
-        json={"token": invite_token, "password": "pilotnewpassword"},
-    )
-    assert claim_res.status_code == 200, claim_res.text
-    user_token = claim_res.json()["token"]
-    user_h = auth_headers(user_token)
-
-    monkeypatch.setattr(
-        "app.main.run_power_check",
-        lambda *_args, **_kwargs: PowerCheckResult(method="tcp", result="off", detail="timeout", latency_ms=5),
-    )
-    monkeypatch.setattr("app.main.send_magic_packet", lambda *_args, **_kwargs: None)
-
-    wake_res = client.post(f"/me/devices/{device_id}/wake", headers=user_h)
-    assert wake_res.status_code == 200, wake_res.text
-    assert wake_res.json()["result"] == "sent"
-
+def test_pilot_metrics_endpoint_is_disabled(client):
+    admin_h, _, _ = _setup_user_and_device(client, username="pilot-user")
     metrics = client.get("/admin/pilot-metrics", headers=admin_h)
-    assert metrics.status_code == 200, metrics.text
-    payload = metrics.json()
-    assert payload["total_claimed_users"] >= 1
-    assert payload["users_with_first_success_within_two_minutes"] >= 1
+    assert metrics.status_code == 410, metrics.text
