@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 import uuid
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 import ipaddress
 from typing import Generator, Literal
 
@@ -296,6 +296,45 @@ def _migration_008_user_token_version(conn: sqlite3.Connection) -> None:
     conn.execute("UPDATE users SET token_version = 0 WHERE token_version IS NULL")
 
 
+def _migration_009_notification_devices(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS notification_devices (
+            id TEXT PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            installation_id TEXT NOT NULL,
+            platform TEXT NOT NULL CHECK(platform IN ('ios')),
+            provider TEXT NOT NULL CHECK(provider IN ('apns')),
+            token TEXT NOT NULL,
+            app_bundle_id TEXT NOT NULL,
+            environment TEXT NOT NULL CHECK(environment IN ('development', 'production')),
+            is_active INTEGER NOT NULL DEFAULT 1,
+            last_registered_at TEXT NOT NULL,
+            last_seen_at TEXT NOT NULL,
+            last_alert_sent_at TEXT,
+            suppressed_shutdown_count INTEGER NOT NULL DEFAULT 0,
+            invalidated_at TEXT,
+            invalidation_reason TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(installation_id, provider)
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_notification_devices_user_active "
+        "ON notification_devices(user_id, is_active, updated_at DESC)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_notification_devices_provider_env_active "
+        "ON notification_devices(provider, environment, is_active, updated_at DESC)"
+    )
+
+
+def _migration_011_remove_ios_entitlements(conn: sqlite3.Connection) -> None:
+    conn.execute("DROP TABLE IF EXISTS ios_entitlements")
+
+
 def init_db() -> None:
     with get_conn() as conn:
         conn.execute(
@@ -319,6 +358,8 @@ def init_db() -> None:
             6: _migration_006_activity_events,
             7: _migration_007_shutdown_poke_requests,
             8: _migration_008_user_token_version,
+            9: _migration_009_notification_devices,
+            11: _migration_011_remove_ios_entitlements,
         }
         for version in sorted(migrations.keys()):
             if version in applied:
@@ -1090,6 +1131,302 @@ def mark_shutdown_poke_resolved(
             """,
             (poke_id,),
         ).fetchone()
+
+
+def upsert_notification_device(
+    *,
+    user_id: int,
+    installation_id: str,
+    platform: Literal["ios"],
+    provider: Literal["apns"],
+    token: str,
+    app_bundle_id: str,
+    environment: Literal["development", "production"],
+) -> sqlite3.Row:
+    now = datetime.now(UTC).isoformat()
+    normalized_installation_id = installation_id.strip()
+    normalized_token = token.strip()
+    normalized_bundle_id = app_bundle_id.strip()
+    with get_conn() as conn:
+        existing = conn.execute(
+            """
+            SELECT *
+            FROM notification_devices
+            WHERE installation_id = ? AND provider = ?
+            """,
+            (normalized_installation_id, provider),
+        ).fetchone()
+        if existing:
+            reset_alert_state = (
+                int(existing["user_id"]) != user_id
+                or str(existing["token"]) != normalized_token
+                or str(existing["environment"]) != environment
+            )
+            last_alert_sent_at = None if reset_alert_state else existing["last_alert_sent_at"]
+            suppressed_shutdown_count = 0 if reset_alert_state else int(existing["suppressed_shutdown_count"] or 0)
+            conn.execute(
+                """
+                UPDATE notification_devices
+                SET user_id = ?,
+                    platform = ?,
+                    token = ?,
+                    app_bundle_id = ?,
+                    environment = ?,
+                    is_active = 1,
+                    last_registered_at = ?,
+                    last_seen_at = ?,
+                    last_alert_sent_at = ?,
+                    suppressed_shutdown_count = ?,
+                    invalidated_at = NULL,
+                    invalidation_reason = NULL,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    user_id,
+                    platform,
+                    normalized_token,
+                    normalized_bundle_id,
+                    environment,
+                    now,
+                    now,
+                    last_alert_sent_at,
+                    suppressed_shutdown_count,
+                    now,
+                    existing["id"],
+                ),
+            )
+            device_id = str(existing["id"])
+        else:
+            device_id = str(uuid.uuid4())
+            conn.execute(
+                """
+                INSERT INTO notification_devices(
+                    id,
+                    user_id,
+                    installation_id,
+                    platform,
+                    provider,
+                    token,
+                    app_bundle_id,
+                    environment,
+                    is_active,
+                    last_registered_at,
+                    last_seen_at,
+                    last_alert_sent_at,
+                    suppressed_shutdown_count,
+                    invalidated_at,
+                    invalidation_reason,
+                    created_at,
+                    updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, NULL, 0, NULL, NULL, ?, ?)
+                """,
+                (
+                    device_id,
+                    user_id,
+                    normalized_installation_id,
+                    platform,
+                    provider,
+                    normalized_token,
+                    normalized_bundle_id,
+                    environment,
+                    now,
+                    now,
+                    now,
+                    now,
+                ),
+            )
+        row = conn.execute(
+            """
+            SELECT *
+            FROM notification_devices
+            WHERE id = ?
+            """,
+            (device_id,),
+        ).fetchone()
+        if row is None:
+            raise RuntimeError("notification device upsert failed")
+        return row
+
+
+def deactivate_notification_device(
+    *,
+    user_id: int,
+    installation_id: str,
+    provider: Literal["apns"],
+) -> bool:
+    now = datetime.now(UTC).isoformat()
+    with get_conn() as conn:
+        cur = conn.execute(
+            """
+            UPDATE notification_devices
+            SET is_active = 0,
+                suppressed_shutdown_count = 0,
+                updated_at = ?
+            WHERE user_id = ? AND installation_id = ? AND provider = ? AND is_active = 1
+            """,
+            (now, user_id, installation_id.strip(), provider),
+        )
+        return cur.rowcount > 0
+
+
+def list_notification_devices(*, user_id: int | None = None) -> list[sqlite3.Row]:
+    params: list[object] = []
+    query = "SELECT * FROM notification_devices"
+    if user_id is not None:
+        query += " WHERE user_id = ?"
+        params.append(user_id)
+    query += " ORDER BY updated_at DESC"
+    with get_conn() as conn:
+        return list(conn.execute(query, tuple(params)).fetchall())
+
+
+def list_active_admin_notification_devices(
+    *,
+    provider: Literal["apns"],
+    platform: Literal["ios"],
+    environment: Literal["development", "production"],
+) -> list[sqlite3.Row]:
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT d.*, u.username
+            FROM notification_devices d
+            INNER JOIN users u ON u.id = d.user_id
+            WHERE d.provider = ?
+              AND d.platform = ?
+              AND d.environment = ?
+              AND d.is_active = 1
+              AND u.role = 'admin'
+            ORDER BY d.updated_at DESC
+            """,
+            (provider, platform, environment),
+        ).fetchall()
+        return list(rows)
+
+
+def record_notification_device_alert_sent(device_id: str, sent_at: str | None = None) -> None:
+    timestamp = sent_at or datetime.now(UTC).isoformat()
+    with get_conn() as conn:
+        conn.execute(
+            """
+            UPDATE notification_devices
+            SET last_alert_sent_at = ?,
+                suppressed_shutdown_count = 0,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (timestamp, timestamp, device_id),
+        )
+
+
+def reserve_notification_device_visible_alert(
+    device_id: str,
+    *,
+    min_interval_seconds: int,
+    reserved_at: str | None = None,
+) -> bool:
+    timestamp = reserved_at or datetime.now(UTC).isoformat()
+    threshold = None
+    if min_interval_seconds > 0:
+        threshold = (datetime.fromisoformat(timestamp) - timedelta(seconds=min_interval_seconds)).isoformat()
+
+    with get_conn() as conn:
+        if threshold is None:
+            result = conn.execute(
+                """
+                UPDATE notification_devices
+                SET last_alert_sent_at = ?,
+                    updated_at = ?
+                WHERE id = ?
+                  AND is_active = 1
+                """,
+                (timestamp, timestamp, device_id),
+            )
+        else:
+            result = conn.execute(
+                """
+                UPDATE notification_devices
+                SET last_alert_sent_at = ?,
+                    updated_at = ?
+                WHERE id = ?
+                  AND is_active = 1
+                  AND (
+                    last_alert_sent_at IS NULL
+                    OR last_alert_sent_at = ''
+                    OR last_alert_sent_at <= ?
+                  )
+                """,
+                (timestamp, timestamp, device_id, threshold),
+            )
+        return result.rowcount > 0
+
+
+def release_notification_device_visible_alert_reservation(
+    device_id: str,
+    *,
+    reserved_at: str,
+    previous_last_alert_sent_at: str | None,
+) -> None:
+    now = datetime.now(UTC).isoformat()
+    with get_conn() as conn:
+        conn.execute(
+            """
+            UPDATE notification_devices
+            SET last_alert_sent_at = ?,
+                updated_at = ?
+            WHERE id = ?
+              AND last_alert_sent_at = ?
+            """,
+            (previous_last_alert_sent_at, now, device_id, reserved_at),
+        )
+
+
+def increment_notification_device_suppressed_shutdown_count(device_id: str) -> None:
+    now = datetime.now(UTC).isoformat()
+    with get_conn() as conn:
+        conn.execute(
+            """
+            UPDATE notification_devices
+            SET suppressed_shutdown_count = COALESCE(suppressed_shutdown_count, 0) + 1,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (now, device_id),
+        )
+
+
+def invalidate_notification_device(device_id: str, reason: str | None = None) -> None:
+    now = datetime.now(UTC).isoformat()
+    normalized_reason = (reason or "").strip() or None
+    with get_conn() as conn:
+        conn.execute(
+            """
+            UPDATE notification_devices
+            SET is_active = 0,
+                invalidated_at = ?,
+                invalidation_reason = ?,
+                suppressed_shutdown_count = 0,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (now, normalized_reason, now, device_id),
+        )
+
+
+def set_notification_device_last_alert_sent_at(device_id: str, timestamp: str | None) -> None:
+    now = datetime.now(UTC).isoformat()
+    with get_conn() as conn:
+        conn.execute(
+            """
+            UPDATE notification_devices
+            SET last_alert_sent_at = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (timestamp, now, device_id),
+        )
 
 
 def create_discovery_run(requested_by: str, options_json: str) -> str:

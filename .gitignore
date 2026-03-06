@@ -15,6 +15,7 @@ backups/
 # IDE
 .idea/
 .vscode/
+.derived-data/
 
 # Android
 android-client/.gradle/

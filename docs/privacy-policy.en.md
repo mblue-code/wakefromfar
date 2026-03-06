@@ -1,15 +1,15 @@
 # WakeFromFar Privacy Policy (English)
 
-Effective date: 2026-03-04  
-Last updated: 2026-03-04
+Effective date: 2026-03-06
+Last updated: 2026-03-06
 
-This Privacy Policy explains how personal data is processed when you use the WakeFromFar Android app and related backend services.
+This Privacy Policy explains how personal data is processed when you use the WakeFromFar mobile apps and related backend services.
 
 Legal notice: This document is an operational policy template for this project and is not legal advice.
 
 ## 1. Who is responsible
 
-### 1.1 App publisher (Google Play)
+### 1.1 App publisher (mobile app distribution)
 
 Controller for app distribution and support:
 
@@ -28,8 +28,9 @@ If your administrator operates the backend, please contact that administrator fi
 This policy covers:
 
 - WakeFromFar Android app
+- WakeFromFar iPhone app
 - WakeFromFar backend APIs and admin UI (if operated by or on behalf of the controller)
-- Google Play Billing flows (if enabled in the app)
+- Platform commerce flows (Google Play Billing where enabled, plus paid App Store distribution for iPhone)
 
 ## 3. Data we process
 
@@ -46,9 +47,9 @@ The exact data depends on your role (user/admin) and enabled features.
 - Backend URL
 - Last-seen activity IDs for admin alerts
 - App preferences (for example theme/language/onboarding state)
-- Local monetization state (for example Pro unlock status and free-tier device ordering key)
+- APNs installation identifiers and push tokens on iPhone when admin alerts are enabled
 
-Note: The app stores security-sensitive session data in encrypted shared preferences on Android.
+Note: The app stores security-sensitive session data in platform-appropriate secure storage, including encrypted shared preferences on Android and Keychain on iPhone. Non-sensitive app preferences are stored locally on the device, including via UserDefaults on iPhone.
 
 ### 3.3 Device and infrastructure data (backend)
 
@@ -67,10 +68,11 @@ Note: The app stores security-sensitive session data in encrypted shared prefere
 
 - Request IP address and related metadata used for authentication protection, rate limiting, and abuse prevention
 
-### 3.6 Billing data (only if purchases are enabled)
+### 3.6 Billing and distribution data
 
-- Product identifiers and purchase tokens/transaction identifiers needed for entitlement verification
-- Payment processing is performed by Google Play under Google terms
+- Android may process product identifiers and purchase tokens when Google Play Billing is enabled
+- iPhone App Store distribution is paid upfront and does not require an in-app entitlement sync flow, purchase restore flow, or runtime unlock check for normal use
+- Payment processing is performed by Google Play or Apple under their platform terms
 - Full payment card data is not processed by the WakeFromFar backend
 
 ## 4. Why we process data (purposes)
@@ -82,7 +84,7 @@ We process data to:
 - Execute wake and power-check actions
 - Provide admin activity, diagnostics, and security/audit functions
 - Operate anti-abuse protections (for example rate limits)
-- Deliver and validate paid features (if billing is enabled)
+- Support paid platform distribution and any enabled platform billing flows
 - Maintain service reliability, debugging, and incident response
 
 ## 5. Legal bases (GDPR, where applicable)
@@ -104,6 +106,7 @@ Data may be shared with:
 - Hosting/infrastructure providers used by the backend operator
 - Service providers acting under instructions (processors)
 - Google (for Play Store distribution and Play Billing, when enabled)
+- Apple (for App Store distribution on iPhone)
 - Authorities, where required by law
 
 ## 7. International transfers
@@ -115,7 +118,7 @@ If providers process data outside your country/EEA, appropriate safeguards shoul
 - App publisher does not operate a central wake-activity cloud by default for this project architecture.
 - Backend data is retained by the backend operator for as long as needed for operations, security, and support, unless deleted earlier.
 - Device-local app data remains on the device until removed by logout, app data reset, or uninstall.
-- Billing-related identifiers are retained as needed for entitlement checks, accounting, and fraud prevention.
+- Billing-related identifiers are retained only as needed for enabled platform commerce flows, publisher accounting/support, and fraud prevention.
 
 You should define and apply concrete retention windows in your operations policy.
 
@@ -148,7 +151,7 @@ You may also lodge a complaint with your local data protection authority.
 
 ## 11. How to exercise rights
 
-For backend-instance data, contact your backend administrator first.  
+For backend-instance data, contact your backend administrator first.
 For app publisher requests, contact: `[INSERT PRIVACY CONTACT EMAIL]`.
 
 We may require reasonable verification of identity before fulfilling requests.

@@ -1,15 +1,15 @@
 # WakeFromFar Datenschutzerklärung (Deutsch)
 
-Gültig ab: 2026-03-04  
-Zuletzt aktualisiert: 2026-03-04
+Gültig ab: 2026-03-06
+Zuletzt aktualisiert: 2026-03-06
 
-Diese Datenschutzerklärung erläutert, wie personenbezogene Daten verarbeitet werden, wenn du die WakeFromFar-Android-App und zugehörige Backend-Dienste nutzt.
+Diese Datenschutzerklärung erläutert, wie personenbezogene Daten verarbeitet werden, wenn du die WakeFromFar-Mobile-Apps und zugehörige Backend-Dienste nutzt.
 
 Rechtlicher Hinweis: Dieses Dokument ist eine operative Richtlinie für dieses Projekt und stellt keine Rechtsberatung dar.
 
 ## 1. Wer ist verantwortlich
 
-### 1.1 App-Herausgeber (Google Play)
+### 1.1 App-Herausgeber (Mobile-App-Distribution)
 
 Verantwortlicher für App-Distribution und Support:
 
@@ -28,8 +28,9 @@ Wenn dein Administrator das Backend betreibt, kontaktiere bei Anfragen zu Backen
 Diese Erklärung gilt für:
 
 - WakeFromFar Android-App
+- WakeFromFar iPhone-App
 - WakeFromFar Backend-APIs und Admin-UI (wenn durch oder im Auftrag des Verantwortlichen betrieben)
-- Google Play Billing-Abläufe (wenn in der App aktiviert)
+- Plattform-Kommerzabläufe (Google Play Billing, wenn aktiviert, sowie kostenpflichtige App-Store-Distribution auf dem iPhone)
 
 ## 3. Welche Daten wir verarbeiten
 
@@ -46,9 +47,9 @@ Die konkret verarbeiteten Daten hängen von deiner Rolle (User/Admin) und den ak
 - Backend-URL
 - Zuletzt gesehene Aktivitäts-IDs für Admin-Hinweise
 - App-Einstellungen (z. B. Theme/Sprache/Onboarding-Status)
-- Lokaler Monetarisierungsstatus (z. B. Pro-Freischaltung und Schlüssel zur Reihenfolge im kostenlosen Modus)
+- APNs-Installationskennungen und Push-Token auf dem iPhone, wenn Admin-Benachrichtigungen aktiviert sind
 
-Hinweis: Sicherheitsrelevante Sitzungsdaten werden auf Android in verschlüsselten Shared Preferences gespeichert.
+Hinweis: Sicherheitsrelevante Sitzungsdaten werden in plattformgerechter sicherer lokaler Speicherung abgelegt, einschließlich verschlüsselter Shared Preferences auf Android und Keychain auf dem iPhone. Nicht sensible App-Einstellungen werden lokal auf dem Gerät gespeichert, einschließlich UserDefaults auf dem iPhone.
 
 ### 3.3 Geräte- und Infrastrukturdaten (Backend)
 
@@ -67,10 +68,11 @@ Hinweis: Sicherheitsrelevante Sitzungsdaten werden auf Android in verschlüsselt
 
 - Request-IP-Adresse und verwandte Metadaten zur Login-Absicherung, Rate-Limiting und Missbrauchsprävention
 
-### 3.6 Billing-Daten (nur wenn Käufe aktiviert sind)
+### 3.6 Billing- und Vertriebsdaten
 
-- Produktkennungen und Kauf-Token/Transaktionskennungen zur Entitlement-Prüfung
-- Die Zahlungsabwicklung erfolgt über Google Play gemäß den Google-Bedingungen
+- Android kann Produktkennungen und Kauf-Token verarbeiten, wenn Google Play Billing aktiviert ist
+- Die iPhone-App wird im App Store kostenpflichtig vertrieben und benötigt für die normale Nutzung weder eine In-App-Entitlement-Synchronisierung noch einen Restore-Kaufablauf oder eine Runtime-Unlock-Prüfung
+- Die Zahlungsabwicklung erfolgt über Google Play oder Apple gemäß deren Plattformbedingungen
 - Vollständige Kartendaten werden nicht vom WakeFromFar-Backend verarbeitet
 
 ## 4. Zwecke der Datenverarbeitung
@@ -82,7 +84,7 @@ Wir verarbeiten Daten, um:
 - Wake- und Power-Check-Aktionen auszuführen
 - Admin-Aktivität, Diagnostik sowie Sicherheits-/Audit-Funktionen bereitzustellen
 - Schutzmaßnahmen gegen Missbrauch umzusetzen (z. B. Rate Limits)
-- Bezahlfunktionen bereitzustellen und zu verifizieren (wenn Billing aktiviert ist)
+- Kostenpflichtige Plattform-Distribution und aktivierte Plattform-Billing-Abläufe zu unterstützen
 - Stabilität, Fehleranalyse und Incident Response sicherzustellen
 
 ## 5. Rechtsgrundlagen (DSGVO, soweit anwendbar)
@@ -104,6 +106,7 @@ Daten können weitergegeben werden an:
 - Hosting-/Infrastruktur-Anbieter des Backend-Betreibers
 - Dienstleister, die als Auftragsverarbeiter auf Weisung tätig sind
 - Google (für Play-Store-Distribution und Play Billing, wenn aktiviert)
+- Apple (für die App-Store-Distribution auf dem iPhone)
 - Behörden, soweit gesetzlich erforderlich
 
 ## 7. Internationale Datenübermittlungen
@@ -115,7 +118,7 @@ Wenn Anbieter Daten außerhalb deines Landes bzw. außerhalb des EWR verarbeiten
 - Der App-Herausgeber betreibt in dieser Projektarchitektur standardmäßig keine zentrale Cloud für Wake-Aktivitäten.
 - Backend-Daten werden vom Backend-Betreiber so lange gespeichert, wie es für Betrieb, Sicherheit und Support erforderlich ist, sofern sie nicht vorher gelöscht werden.
 - Lokal auf dem Gerät gespeicherte App-Daten bleiben bis zum Logout, Zurücksetzen der App-Daten oder zur Deinstallation erhalten.
-- Billing-bezogene Kennungen werden so lange gespeichert, wie es für Entitlement-Prüfung, Abrechnung und Betrugsprävention erforderlich ist.
+- Billing-bezogene Kennungen werden nur so lange gespeichert, wie es für aktivierte Plattform-Kommerzabläufe, Verlagsabrechnung/-support und Betrugsprävention erforderlich ist.
 
 Du solltest konkrete Aufbewahrungsfristen in deiner Betriebsrichtlinie definieren und umsetzen.
 
@@ -148,7 +151,7 @@ Du kannst außerdem eine Beschwerde bei der zuständigen Datenschutzaufsichtsbeh
 
 ## 11. So kannst du deine Rechte ausüben
 
-Für Daten in deiner Backend-Instanz kontaktiere zuerst deinen Backend-Administrator.  
+Für Daten in deiner Backend-Instanz kontaktiere zuerst deinen Backend-Administrator.
 Für Anfragen an den App-Herausgeber kontaktiere: `[DATENSCHUTZ-KONTAKT EINTRAGEN]`.
 
 Vor der Bearbeitung können wir eine angemessene Identitätsprüfung verlangen.

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -45,6 +46,20 @@ class Settings(BaseSettings):
     rate_limit_backend: str = Field(default="redis", alias="RATE_LIMIT_BACKEND")
     rate_limit_redis_url: str = Field(default="redis://127.0.0.1:6379/0", alias="RATE_LIMIT_REDIS_URL")
     enable_api_docs: bool = Field(default=False, alias="ENABLE_API_DOCS")
+    apns_enabled: bool = Field(default=False, alias="APNS_ENABLED")
+    apns_team_id: str | None = Field(default=None, alias="APNS_TEAM_ID")
+    apns_key_id: str | None = Field(default=None, alias="APNS_KEY_ID")
+    apns_topic: str | None = Field(default=None, alias="APNS_TOPIC")
+    apns_environment: Literal["development", "production"] = Field(
+        default="development",
+        alias="APNS_ENVIRONMENT",
+    )
+    apns_private_key: str | None = Field(default=None, alias="APNS_PRIVATE_KEY")
+    apns_private_key_path: Path | None = Field(default=None, alias="APNS_PRIVATE_KEY_PATH")
+    apns_admin_alert_min_visible_interval_seconds: int = Field(
+        default=0,
+        alias="APNS_ADMIN_ALERT_MIN_VISIBLE_INTERVAL_SECONDS",
+    )
 
     wake_send_max_attempts: int = Field(default=2, alias="WAKE_SEND_MAX_ATTEMPTS")
     wake_send_backoff_ms: int = Field(default=150, alias="WAKE_SEND_BACKOFF_MS")
@@ -83,6 +98,14 @@ class Settings(BaseSettings):
             if 1 <= value <= 65535:
                 ports.append(value)
         return ports or [22, 80, 443, 445]
+
+    @property
+    def apns_private_key_text(self) -> str | None:
+        if self.apns_private_key:
+            return self.apns_private_key.replace("\\n", "\n").strip() or None
+        if self.apns_private_key_path and self.apns_private_key_path.exists():
+            return self.apns_private_key_path.read_text(encoding="utf-8").strip() or None
+        return None
 
 
 @lru_cache

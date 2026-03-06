@@ -2,6 +2,8 @@
 
 This checklist is the final gate before promoting builds.
 
+For the native iPhone client release-hardening and TestFlight/App Store checklist, also review `docs/ios-release-readiness.md`.
+
 ## Gate 1: Before Testing
 
 1. Backend tests pass:

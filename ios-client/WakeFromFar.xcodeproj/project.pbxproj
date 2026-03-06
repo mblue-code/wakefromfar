@@ -1,0 +1,469 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		A00000000000000000000001 /* WakeFromFarApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000021 /* WakeFromFarApp.swift */; };
+		A00000000000000000000002 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000022 /* RootView.swift */; };
+		A00000000000000000000003 /* AppServices.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000023 /* AppServices.swift */; };
+		A00000000000000000000004 /* AppMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000024 /* AppMessage.swift */; };
+		A00000000000000000000005 /* MessageBanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000025 /* MessageBanner.swift */; };
+		A00000000000000000000006 /* EmptyStateView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000026 /* EmptyStateView.swift */; };
+		A00000000000000000000007 /* MainTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000027 /* MainTabView.swift */; };
+		A0000000000000000000001B /* PlatformViewModifiers.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000028 /* PlatformViewModifiers.swift */; };
+		A0000000000000000000001D /* WakeFromFarAppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000029 /* WakeFromFarAppDelegate.swift */; };
+		A00000000000000000000008 /* LoginView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000031 /* LoginView.swift */; };
+		A00000000000000000000009 /* LoginViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000032 /* LoginViewModel.swift */; };
+		A0000000000000000000001C /* FirstRunGuidanceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000039 /* FirstRunGuidanceView.swift */; };
+		A0000000000000000000000A /* DevicesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000033 /* DevicesView.swift */; };
+		A0000000000000000000000B /* DevicesViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000034 /* DevicesViewModel.swift */; };
+		A0000000000000000000000C /* AdminActivityView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000035 /* AdminActivityView.swift */; };
+		A0000000000000000000000D /* AdminActivityViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000036 /* AdminActivityViewModel.swift */; };
+		A0000000000000000000000E /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000037 /* SettingsView.swift */; };
+		A0000000000000000000000F /* LegalPrivacyView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000038 /* LegalPrivacyView.swift */; };
+		A00000000000000000000010 /* APIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000041 /* APIClient.swift */; };
+		A00000000000000000000011 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000042 /* Models.swift */; };
+		A00000000000000000000012 /* SessionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000043 /* SessionStore.swift */; };
+		A00000000000000000000013 /* JWTClaimsDecoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000044 /* JWTClaimsDecoder.swift */; };
+		A00000000000000000000014 /* APNSNotificationCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000045 /* APNSNotificationCoordinator.swift */; };
+		A00000000000000000000016 /* AppPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000047 /* AppPreferences.swift */; };
+		A00000000000000000000017 /* KeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000048 /* KeychainStore.swift */; };
+		A00000000000000000000018 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000051 /* Assets.xcassets */; };
+		A00000000000000000000019 /* Localizable.strings in Resources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000052 /* Localizable.strings */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		A0000000000000000000001A /* WakeFromFar.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = WakeFromFar.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A00000000000000000000021 /* WakeFromFarApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WakeFromFarApp.swift; sourceTree = "<group>"; };
+		A00000000000000000000022 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
+		A00000000000000000000023 /* AppServices.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppServices.swift; sourceTree = "<group>"; };
+		A00000000000000000000024 /* AppMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppMessage.swift; sourceTree = "<group>"; };
+		A00000000000000000000025 /* MessageBanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageBanner.swift; sourceTree = "<group>"; };
+		A00000000000000000000026 /* EmptyStateView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmptyStateView.swift; sourceTree = "<group>"; };
+		A00000000000000000000027 /* MainTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainTabView.swift; sourceTree = "<group>"; };
+		A00000000000000000000028 /* PlatformViewModifiers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlatformViewModifiers.swift; sourceTree = "<group>"; };
+		A00000000000000000000029 /* WakeFromFarAppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WakeFromFarAppDelegate.swift; sourceTree = "<group>"; };
+		A00000000000000000000031 /* LoginView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoginView.swift; sourceTree = "<group>"; };
+		A00000000000000000000032 /* LoginViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoginViewModel.swift; sourceTree = "<group>"; };
+		A00000000000000000000033 /* DevicesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevicesView.swift; sourceTree = "<group>"; };
+		A00000000000000000000034 /* DevicesViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevicesViewModel.swift; sourceTree = "<group>"; };
+		A00000000000000000000035 /* AdminActivityView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdminActivityView.swift; sourceTree = "<group>"; };
+		A00000000000000000000036 /* AdminActivityViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdminActivityViewModel.swift; sourceTree = "<group>"; };
+		A00000000000000000000037 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		A00000000000000000000038 /* LegalPrivacyView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LegalPrivacyView.swift; sourceTree = "<group>"; };
+		A00000000000000000000039 /* FirstRunGuidanceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FirstRunGuidanceView.swift; sourceTree = "<group>"; };
+		A00000000000000000000041 /* APIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIClient.swift; sourceTree = "<group>"; };
+		A00000000000000000000042 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
+		A00000000000000000000043 /* SessionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionStore.swift; sourceTree = "<group>"; };
+		A00000000000000000000044 /* JWTClaimsDecoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JWTClaimsDecoder.swift; sourceTree = "<group>"; };
+		A00000000000000000000045 /* APNSNotificationCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APNSNotificationCoordinator.swift; sourceTree = "<group>"; };
+		A00000000000000000000047 /* AppPreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppPreferences.swift; sourceTree = "<group>"; };
+		A00000000000000000000048 /* KeychainStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainStore.swift; sourceTree = "<group>"; };
+		A00000000000000000000049 /* en */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = en; path = Localization/en.lproj/Localizable.strings; sourceTree = "<group>"; };
+		A0000000000000000000004A /* de */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = de; path = Localization/de.lproj/Localizable.strings; sourceTree = "<group>"; };
+		A00000000000000000000051 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		A00000000000000000000053 /* WakeFromFar.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = WakeFromFar.entitlements; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		A00000000000000000000061 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		A00000000000000000000062 = {
+			isa = PBXGroup;
+			children = (
+				A00000000000000000000063 /* App */,
+				A00000000000000000000064 /* Features */,
+				A00000000000000000000065 /* Services */,
+				A00000000000000000000066 /* Persistence */,
+				A00000000000000000000067 /* Resources */,
+				A00000000000000000000068 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		A00000000000000000000063 /* App */ = {
+			isa = PBXGroup;
+			children = (
+				A00000000000000000000021 /* WakeFromFarApp.swift */,
+				A00000000000000000000022 /* RootView.swift */,
+				A00000000000000000000023 /* AppServices.swift */,
+				A00000000000000000000024 /* AppMessage.swift */,
+				A00000000000000000000025 /* MessageBanner.swift */,
+				A00000000000000000000026 /* EmptyStateView.swift */,
+				A00000000000000000000027 /* MainTabView.swift */,
+				A00000000000000000000028 /* PlatformViewModifiers.swift */,
+				A00000000000000000000029 /* WakeFromFarAppDelegate.swift */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		A00000000000000000000064 /* Features */ = {
+			isa = PBXGroup;
+			children = (
+				A00000000000000000000069 /* Auth */,
+				A0000000000000000000006A /* Devices */,
+				A0000000000000000000006B /* AdminActivity */,
+				A0000000000000000000006C /* Settings */,
+			);
+			path = Features;
+			sourceTree = "<group>";
+		};
+		A00000000000000000000065 /* Services */ = {
+			isa = PBXGroup;
+			children = (
+				A0000000000000000000006D /* API */,
+				A0000000000000000000006E /* Auth */,
+				A0000000000000000000006F /* Notifications */,
+				A00000000000000000000070 /* Billing */,
+			);
+			path = Services;
+			sourceTree = "<group>";
+		};
+		A00000000000000000000066 /* Persistence */ = {
+			isa = PBXGroup;
+			children = (
+				A00000000000000000000047 /* AppPreferences.swift */,
+				A00000000000000000000048 /* KeychainStore.swift */,
+			);
+			path = Persistence;
+			sourceTree = "<group>";
+		};
+		A00000000000000000000067 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				A00000000000000000000051 /* Assets.xcassets */,
+				A00000000000000000000052 /* Localizable.strings */,
+				A00000000000000000000053 /* WakeFromFar.entitlements */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+		A00000000000000000000068 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				A0000000000000000000001A /* WakeFromFar.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		A00000000000000000000069 /* Auth */ = {
+			isa = PBXGroup;
+			children = (
+				A00000000000000000000031 /* LoginView.swift */,
+				A00000000000000000000032 /* LoginViewModel.swift */,
+				A00000000000000000000039 /* FirstRunGuidanceView.swift */,
+			);
+			path = Auth;
+			sourceTree = "<group>";
+		};
+		A0000000000000000000006A /* Devices */ = {
+			isa = PBXGroup;
+			children = (
+				A00000000000000000000033 /* DevicesView.swift */,
+				A00000000000000000000034 /* DevicesViewModel.swift */,
+			);
+			path = Devices;
+			sourceTree = "<group>";
+		};
+		A0000000000000000000006B /* AdminActivity */ = {
+			isa = PBXGroup;
+			children = (
+				A00000000000000000000035 /* AdminActivityView.swift */,
+				A00000000000000000000036 /* AdminActivityViewModel.swift */,
+			);
+			path = AdminActivity;
+			sourceTree = "<group>";
+		};
+		A0000000000000000000006C /* Settings */ = {
+			isa = PBXGroup;
+			children = (
+				A00000000000000000000037 /* SettingsView.swift */,
+				A00000000000000000000038 /* LegalPrivacyView.swift */,
+			);
+			path = Settings;
+			sourceTree = "<group>";
+		};
+		A0000000000000000000006D /* API */ = {
+			isa = PBXGroup;
+			children = (
+				A00000000000000000000041 /* APIClient.swift */,
+				A00000000000000000000042 /* Models.swift */,
+			);
+			path = API;
+			sourceTree = "<group>";
+		};
+		A0000000000000000000006E /* Auth */ = {
+			isa = PBXGroup;
+			children = (
+				A00000000000000000000043 /* SessionStore.swift */,
+				A00000000000000000000044 /* JWTClaimsDecoder.swift */,
+			);
+			path = Auth;
+			sourceTree = "<group>";
+		};
+		A0000000000000000000006F /* Notifications */ = {
+			isa = PBXGroup;
+			children = (
+				A00000000000000000000045 /* APNSNotificationCoordinator.swift */,
+			);
+			path = Notifications;
+			sourceTree = "<group>";
+		};
+		A00000000000000000000070 /* Billing */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = Billing;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		A00000000000000000000071 /* WakeFromFar */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A00000000000000000000081 /* Build configuration list for PBXNativeTarget "WakeFromFar" */;
+			buildPhases = (
+				A00000000000000000000072 /* Sources */,
+				A00000000000000000000061 /* Frameworks */,
+				A00000000000000000000073 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = WakeFromFar;
+			productName = WakeFromFar;
+			productReference = A0000000000000000000001A /* WakeFromFar.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		A00000000000000000000074 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1600;
+				LastUpgradeCheck = 1600;
+				TargetAttributes = {
+					A00000000000000000000071 = {
+						CreatedOnToolsVersion = 16.0;
+					};
+				};
+			};
+			buildConfigurationList = A00000000000000000000082 /* Build configuration list for PBXProject "WakeFromFar" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				de,
+				Base,
+			);
+			mainGroup = A00000000000000000000062;
+			productRefGroup = A00000000000000000000068 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				A00000000000000000000071 /* WakeFromFar */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		A00000000000000000000073 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A00000000000000000000018 /* Assets.xcassets in Resources */,
+				A00000000000000000000019 /* Localizable.strings in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		A00000000000000000000072 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A00000000000000000000001 /* WakeFromFarApp.swift in Sources */,
+				A00000000000000000000002 /* RootView.swift in Sources */,
+				A00000000000000000000003 /* AppServices.swift in Sources */,
+				A00000000000000000000004 /* AppMessage.swift in Sources */,
+				A00000000000000000000005 /* MessageBanner.swift in Sources */,
+				A00000000000000000000006 /* EmptyStateView.swift in Sources */,
+				A00000000000000000000007 /* MainTabView.swift in Sources */,
+				A0000000000000000000001B /* PlatformViewModifiers.swift in Sources */,
+				A0000000000000000000001D /* WakeFromFarAppDelegate.swift in Sources */,
+				A00000000000000000000008 /* LoginView.swift in Sources */,
+				A00000000000000000000009 /* LoginViewModel.swift in Sources */,
+				A0000000000000000000001C /* FirstRunGuidanceView.swift in Sources */,
+				A0000000000000000000000A /* DevicesView.swift in Sources */,
+				A0000000000000000000000B /* DevicesViewModel.swift in Sources */,
+				A0000000000000000000000C /* AdminActivityView.swift in Sources */,
+				A0000000000000000000000D /* AdminActivityViewModel.swift in Sources */,
+				A0000000000000000000000E /* SettingsView.swift in Sources */,
+				A0000000000000000000000F /* LegalPrivacyView.swift in Sources */,
+				A00000000000000000000010 /* APIClient.swift in Sources */,
+				A00000000000000000000011 /* Models.swift in Sources */,
+				A00000000000000000000012 /* SessionStore.swift in Sources */,
+				A00000000000000000000013 /* JWTClaimsDecoder.swift in Sources */,
+				A00000000000000000000014 /* APNSNotificationCoordinator.swift in Sources */,
+				A00000000000000000000016 /* AppPreferences.swift in Sources */,
+				A00000000000000000000017 /* KeychainStore.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXVariantGroup section */
+		A00000000000000000000052 /* Localizable.strings */ = {
+			isa = PBXVariantGroup;
+			children = (
+				A00000000000000000000049 /* en */,
+				A0000000000000000000004A /* de */,
+			);
+			name = Localizable.strings;
+			sourceTree = "<group>";
+		};
+/* End PBXVariantGroup section */
+
+/* Begin XCBuildConfiguration section */
+		A00000000000000000000083 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = NO;
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		A00000000000000000000084 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = NO;
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
+		A00000000000000000000085 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				APS_ENVIRONMENT = development;
+				CODE_SIGN_STYLE = Automatic;
+				CODE_SIGN_ENTITLEMENTS = WakeFromFar.entitlements;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_ASSET_PATHS = "\"Resources\"";
+				INFOPLIST_KEY_CFBundleDisplayName = WakeFromFar;
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.wakefromfar.iosclient;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		A00000000000000000000086 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				APS_ENVIRONMENT = production;
+				CODE_SIGN_STYLE = Automatic;
+				CODE_SIGN_ENTITLEMENTS = WakeFromFar.entitlements;
+				CURRENT_PROJECT_VERSION = 1;
+				INFOPLIST_KEY_CFBundleDisplayName = WakeFromFar;
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.wakefromfar.iosclient;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		A00000000000000000000081 /* Build configuration list for PBXNativeTarget "WakeFromFar" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A00000000000000000000085 /* Debug */,
+				A00000000000000000000086 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A00000000000000000000082 /* Build configuration list for PBXProject "WakeFromFar" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A00000000000000000000083 /* Debug */,
+				A00000000000000000000084 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = A00000000000000000000074 /* Project object */;
+}

@@ -4,6 +4,12 @@ MVP-Monorepo mit:
 
 - `backend/`: Dockerisiertes FastAPI-Backend (Auth, Hosts, Wake-on-LAN)
 - `android-client/`: Kotlin/Compose Android-Client (Login, Hostliste, Wake)
+- `ios-client/`: Native SwiftUI iPhone-Client (Login, Geräte, Admin-Aktivität, APNs, paid App Store distribution)
+
+Release-Dokumente:
+
+- `docs/ios-release-readiness.md` für den finalen iPhone/TestFlight/App-Store-Readiness-Status
+- `docs/release-gates.md` für die allgemeinen Backend-/Release-Gates
 
 ## 1. Backend starten
 

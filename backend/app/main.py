@@ -11,6 +11,7 @@ from fastapi.responses import RedirectResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from .admin_ui import router as admin_ui_router
+from .apns import APNSConfigurationError, APNSNotificationService
 from .config import Settings, get_settings
 from .diagnostics import device_diagnostic_hints
 from .db import (
@@ -22,6 +23,7 @@ from .db import (
     create_activity_event,
     create_shutdown_poke_request,
     create_user,
+    deactivate_notification_device,
     delete_host,
     delete_user,
     fail_discovery_run,
@@ -56,6 +58,7 @@ from .db import (
     mark_shutdown_poke_seen,
     remove_assignment,
     complete_discovery_run,
+    upsert_notification_device,
     update_host,
     update_host_power_state,
     update_user_password_by_id,
@@ -85,6 +88,7 @@ from .schemas import (
     AdminUserCreate,
     AdminUserOut,
     AdminUserUpdate,
+    APNSDeviceRegistrationRequest,
     AssignmentCreate,
     AssignmentOut,
     ActivityEventOut,
@@ -101,6 +105,7 @@ from .schemas import (
     LoginResponse,
     MeWakeResponse,
     MyDeviceOut,
+    NotificationDeviceOut,
     PowerCheckResponse,
     ShutdownPokeCreateRequest,
     ShutdownPokeOut,
@@ -140,6 +145,13 @@ def _init_bootstrap() -> None:
         )
     if settings.admin_pass and len(settings.admin_pass) < MIN_ADMIN_PASSWORD_LENGTH:
         raise RuntimeError(f"ADMIN_PASS is too short. Use at least {MIN_ADMIN_PASSWORD_LENGTH} characters.")
+    if settings.apns_enabled:
+        if not settings.apns_topic:
+            raise RuntimeError("APNS_TOPIC must be set when APNS is enabled.")
+        if not settings.apns_team_id or not settings.apns_key_id:
+            raise RuntimeError("APNS_TEAM_ID and APNS_KEY_ID must be set when APNS is enabled.")
+        if not settings.apns_private_key_text:
+            raise RuntimeError("APNS private key material must be set when APNS is enabled.")
     configure_rate_limiter(settings)
     init_db()
     if settings.admin_user and settings.admin_pass:
@@ -390,6 +402,54 @@ def _shutdown_poke_to_out(row: dict) -> ShutdownPokeOut:
         resolved_at=row["resolved_at"],
         resolved_by_user_id=row["resolved_by_user_id"],
         resolved_by_username=row["resolved_by_username"],
+    )
+
+
+def _notification_device_to_out(row: dict) -> NotificationDeviceOut:
+    return NotificationDeviceOut(
+        installation_id=row["installation_id"],
+        platform=row["platform"],
+        provider=row["provider"],
+        app_bundle_id=row["app_bundle_id"],
+        environment=row["environment"],
+        is_active=bool(row["is_active"]),
+        updated_at=row["updated_at"],
+    )
+
+
+def _get_apns_notification_service() -> APNSNotificationService:
+    return APNSNotificationService(settings=get_settings())
+
+
+def _dispatch_shutdown_poke_admin_notifications() -> None:
+    settings = get_settings()
+    if not settings.apns_enabled:
+        return
+    try:
+        result = _get_apns_notification_service().send_admin_shutdown_request_alerts()
+    except APNSConfigurationError as exc:
+        increment_counter("apns.shutdown_request.config_error")
+        structured_log("apns.shutdown_request.config_error", error=str(exc))
+        return
+    except Exception as exc:  # pragma: no cover
+        increment_counter("apns.shutdown_request.dispatch_error")
+        structured_log("apns.shutdown_request.dispatch_error", error=str(exc))
+        return
+
+    for _ in range(result.sent_count):
+        increment_counter("apns.shutdown_request.sent")
+    for _ in range(result.suppressed_count):
+        increment_counter("apns.shutdown_request.suppressed")
+    for _ in range(result.invalidated_count):
+        increment_counter("apns.shutdown_request.invalidated")
+    for _ in range(result.failed_count):
+        increment_counter("apns.shutdown_request.failed")
+    structured_log(
+        "apns.shutdown_request.dispatched",
+        sent_count=result.sent_count,
+        suppressed_count=result.suppressed_count,
+        invalidated_count=result.invalidated_count,
+        failed_count=result.failed_count,
     )
 
 
@@ -1013,9 +1073,59 @@ def me_wake(
     )
 
 
+@app.post("/me/notification-devices/apns", response_model=NotificationDeviceOut)
+def me_register_apns_notification_device(
+    body: APNSDeviceRegistrationRequest,
+    current_user: Annotated[dict, Depends(get_current_user)],
+) -> NotificationDeviceOut:
+    row = upsert_notification_device(
+        user_id=int(current_user["id"]),
+        installation_id=body.installation_id,
+        platform="ios",
+        provider="apns",
+        token=body.token,
+        app_bundle_id=body.app_bundle_id,
+        environment=body.environment,
+    )
+    increment_counter("apns.device.registered")
+    structured_log(
+        "apns.device.registered",
+        user_id=current_user["id"],
+        username=current_user["username"],
+        installation_id=body.installation_id,
+        environment=body.environment,
+    )
+    return _notification_device_to_out(row)
+
+
+@app.delete(
+    "/me/notification-devices/apns/{installation_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_model=None,
+)
+def me_delete_apns_notification_device(
+    installation_id: str,
+    current_user: Annotated[dict, Depends(get_current_user)],
+) -> None:
+    deactivated = deactivate_notification_device(
+        user_id=int(current_user["id"]),
+        installation_id=installation_id,
+        provider="apns",
+    )
+    if deactivated:
+        increment_counter("apns.device.deactivated")
+        structured_log(
+            "apns.device.deactivated",
+            user_id=current_user["id"],
+            username=current_user["username"],
+            installation_id=installation_id,
+        )
+
+
 @app.post("/me/devices/{host_id}/shutdown-poke", status_code=status.HTTP_201_CREATED, response_model=ShutdownPokeOut)
 def me_shutdown_poke(
     host_id: str,
+    background_tasks: BackgroundTasks,
     request: Request,
     current_user: Annotated[dict, Depends(get_current_user)],
     body: ShutdownPokeCreateRequest | None = None,
@@ -1059,6 +1169,7 @@ def me_shutdown_poke(
         poke_id=poke_id,
         device_id=host_id,
     )
+    background_tasks.add_task(_dispatch_shutdown_poke_admin_notifications)
     return _shutdown_poke_to_out(row)
 
 

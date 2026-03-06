@@ -204,6 +204,23 @@ class ShutdownPokeOut(BaseModel):
     resolved_by_username: str | None = None
 
 
+class APNSDeviceRegistrationRequest(BaseModel):
+    installation_id: str = Field(min_length=1, max_length=128)
+    token: str = Field(min_length=32, max_length=512)
+    app_bundle_id: str = Field(min_length=1, max_length=255)
+    environment: Literal["development", "production"]
+
+
+class NotificationDeviceOut(BaseModel):
+    installation_id: str
+    platform: Literal["ios"]
+    provider: Literal["apns"]
+    app_bundle_id: str
+    environment: Literal["development", "production"]
+    is_active: bool
+    updated_at: datetime
+
+
 class PowerCheckResponse(BaseModel):
     device_id: str
     method: str
