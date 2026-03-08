@@ -353,6 +353,11 @@ _I18N = {
         "label_import_mode": "Import mode",
         "option_auto_merge_by_mac": "auto merge by MAC",
         "option_create_new": "create new only",
+        "empty_state": "No records found",
+        "nav_section_management": "MANAGEMENT",
+        "nav_section_scheduling": "SCHEDULING",
+        "nav_section_logs": "LOGS",
+        "nav_section_system": "SYSTEM",
     },
     "de": {
         "nav_dashboard": "Dashboard",
@@ -632,6 +637,11 @@ _I18N = {
         "label_import_mode": "Import-Modus",
         "option_auto_merge_by_mac": "Automatisch per MAC zusammenführen",
         "option_create_new": "Nur neu erstellen",
+        "empty_state": "Keine Einträge gefunden",
+        "nav_section_management": "VERWALTUNG",
+        "nav_section_scheduling": "PLANUNG",
+        "nav_section_logs": "PROTOKOLLE",
+        "nav_section_system": "SYSTEM",
     },
 }
 
@@ -691,11 +701,13 @@ def _esc(value: object | None) -> str:
 
 
 _BADGE_COLORS = {
-    "sent": "#2d8a4e", "failed": "#c0392b",
-    "already_on": "#2980b9", "on": "#2d8a4e", "off": "#888",
-    "tcp": "#7d3c98", "icmp": "#1a6996",
-    "admin": "#d35400", "user": "#555",
-    "unknown": "#999",
+    "sent": "#22a55a", "on": "#22a55a", "completed": "#22a55a", "enabled": "#22a55a", "high": "#22a55a",
+    "already_on": "#3b82f6", "running": "#3b82f6",
+    "failed": "#e53535", "error": "#e53535", "low": "#e53535",
+    "off": "#8b92a8", "unknown": "#8b92a8", "disabled": "#8b92a8", "pending": "#8b92a8",
+    "tcp": "#7c3aed", "icmp": "#0d9488",
+    "admin": "#4f6ef7", "medium": "#e5930a",
+    "user": "#8b92a8",
 }
 
 
@@ -710,6 +722,17 @@ def _device_cell(device_id: str | None, name_map: dict[str, str]) -> str:
 def _badge(value: str) -> str:
     color = _BADGE_COLORS.get(value.lower(), "#666")
     return f'<span class="badge" style="background:{color}">{_esc(value)}</span>'
+
+
+def _short_id(val) -> str:
+    s = str(val or "")
+    if len(s) > 12:
+        return f'<span title="{_esc(s)}">{_esc(s[:8])}\u2026</span>'
+    return _esc(s)
+
+
+def _empty_row(request: Request, colspan: int) -> str:
+    return f'<tr><td colspan="{colspan}" style="text-align:center;padding:var(--space-6);color:var(--muted);font-style:italic">{_tr(request, "empty_state")}</td></tr>'
 
 
 def _checkbox_checked(value: object) -> str:
@@ -895,7 +918,7 @@ def _scheduled_wake_form_body(
         <label class="stacked-cell">{t("label_local_time")}
           <input name="local_time" required value="{_esc(values.get('local_time'))}" placeholder="07:30" />
         </label>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <div class="form-inline">
           <button type="submit">{_esc(submit_label)}</button>
           <a href="{_esc(_with_lang(return_to, _lang(request)))}">{t("action_manage_schedules")}</a>
         </div>
@@ -976,9 +999,9 @@ def _layout(request: Request, title: str, body: str, admin_username: str, messag
     t = lambda key, **kwargs: _tr(request, key, **kwargs)
     flashes = ""
     if message:
-        flashes += f'<div class="flash flash-ok"><span>{_esc(message)}</span><button class="flash-close" aria-label="dismiss">×</button></div>'
+        flashes += f'<div class="flash flash-ok"><span>\u2713 {_esc(message)}</span><button class="flash-close" aria-label="dismiss">\u00d7</button></div>'
     if error:
-        flashes += f'<div class="flash flash-err"><span>{_esc(error)}</span><button class="flash-close" aria-label="dismiss">×</button></div>'
+        flashes += f'<div class="flash flash-err"><span>\u2715 {_esc(error)}</span><button class="flash-close" aria-label="dismiss">\u00d7</button></div>'
     cur = request.url.path
 
     def _nav(path: str, label: str) -> str:
@@ -990,46 +1013,57 @@ def _layout(request: Request, title: str, body: str, admin_username: str, messag
     sidebar = f"""<aside class="sidebar">
       <div class="sidebar-brand">WakeFromFar</div>
       <nav>
+        <span class="nav-label">{t('nav_section_management')}</span>
         {_nav('/admin/ui', t('nav_dashboard'))}
         {_nav('/admin/ui/users', t('nav_users'))}
         {_nav('/admin/ui/devices', t('nav_devices'))}
+        <span class="nav-label">{t('nav_section_scheduling')}</span>
         {_nav('/admin/ui/scheduled-wakes', t('nav_scheduled_wakes'))}
         {_nav('/admin/ui/device-memberships', t('nav_device_access'))}
-        <div class="nav-sep"></div>
+        <span class="nav-label">{t('nav_section_logs')}</span>
         {_nav('/admin/ui/wake-logs', t('nav_wake_logs'))}
         {_nav('/admin/ui/power-check-logs', t('nav_power_logs'))}
         {_nav('/admin/ui/audit-logs', t('nav_audit_logs'))}
-        <div class="nav-sep"></div>
+        <span class="nav-label">{t('nav_section_system')}</span>
         {_nav('/admin/ui/diagnostics', t('nav_diagnostics'))}
         {_nav('/admin/ui/discovery', t('nav_discovery'))}
         {_nav('/admin/ui/metrics', t('nav_metrics'))}
       </nav>
+      <div class="sidebar-footer">Admin Panel</div>
     </aside>"""
 
     css = """
 :root{
   --sidebar-w:220px;--sidebar-bg:#1a1f2e;--sidebar-text:#b8c0d0;--sidebar-active:#fff;--sidebar-active-bg:rgba(255,255,255,.12);--topbar-h:56px;
-  --bg:#f5f7fb;--fg:#1f2937;--card-bg:#fff;--card-border:#d7dce3;
-  --topbar-bg:#fff;--topbar-border:#d7dce3;
-  --input-bg:#fff;--input-border:#cbd5e1;--input-fg:#111827;
-  --table-bg:#fff;--table-border:#d7dce3;--thead-bg:#f8fafc;--row-border:#e5e7eb;
-  --muted:#64748b;--link:#1d4ed8;--code-bg:#f2f4f8;--code-border:#d7dce3;
-  --btn-bg:#0f172a;--btn-border:#0f172a;--btn2-bg:#fff;--btn2-fg:#334155;--btn2-border:#94a3b8;
+  --bg:#f8f9fc;--fg:#1a1d26;--card-bg:#fff;--card-border:#e2e5ed;
+  --topbar-bg:#fff;--topbar-border:#e2e5ed;
+  --input-bg:#fff;--input-border:#e2e5ed;--input-fg:#1a1d26;
+  --table-bg:#fff;--table-border:#e2e5ed;--thead-bg:#f1f3f8;--row-border:#eef0f5;
+  --muted:#8b92a8;--link:#4f6ef7;--code-bg:#f1f3f8;--code-border:#e2e5ed;
+  --btn-bg:#4f6ef7;--btn-border:#4f6ef7;--btn2-bg:#fff;--btn2-fg:#5a6178;--btn2-border:#e2e5ed;
+  --surface-alt:#f1f3f8;--accent:#4f6ef7;--accent-hover:#3b5ae0;--accent-subtle:#eef1fe;
+  --success:#22a55a;--success-bg:#edfbf3;--warning:#e5930a;--warning-bg:#fef8ec;--danger:#e53535;--danger-bg:#fef0f0;--info:#3b82f6;--info-bg:#eff6ff;
+  --space-1:.25rem;--space-2:.5rem;--space-3:.75rem;--space-4:1rem;--space-5:1.5rem;--space-6:2rem;--space-8:3rem;
+  --text-xs:.75rem;--text-sm:.8125rem;--text-base:.875rem;--text-md:1rem;--text-lg:1.125rem;--text-xl:1.5rem;--text-2xl:2rem;
 }
 [data-theme="dark"]{
-  --bg:#0f1117;--fg:#e2e8f0;--card-bg:#1e2433;--card-border:#2d3748;
-  --topbar-bg:#1a1f2e;--topbar-border:#2d3748;
-  --input-bg:#2d3748;--input-border:#4a5568;--input-fg:#e2e8f0;
-  --table-bg:#1e2433;--table-border:#2d3748;--thead-bg:#252d3d;--row-border:#2d3748;
-  --muted:#94a3b8;--link:#60a5fa;--code-bg:#252d3d;--code-border:#374151;
-  --btn-bg:#334155;--btn-border:#475569;--btn2-bg:#2d3748;--btn2-fg:#cbd5e1;--btn2-border:#4a5568;
+  --bg:#0c0e14;--fg:#e8eaf0;--card-bg:#181c28;--card-border:#2a3045;
+  --topbar-bg:#181c28;--topbar-border:#2a3045;
+  --input-bg:#1e2333;--input-border:#2a3045;--input-fg:#e8eaf0;
+  --table-bg:#181c28;--table-border:#2a3045;--thead-bg:#1e2333;--row-border:#232840;
+  --muted:#6b7290;--link:#6b8aff;--code-bg:#1e2333;--code-border:#2a3045;
+  --btn-bg:#6b8aff;--btn-border:#6b8aff;--btn2-bg:#1e2333;--btn2-fg:#9da3b8;--btn2-border:#2a3045;
+  --surface-alt:#1e2333;--accent:#6b8aff;--accent-hover:#8da4ff;--accent-subtle:#1e2545;
+  --success:#34d17a;--success-bg:rgba(52,209,122,.12);--warning:#f5a623;--warning-bg:rgba(245,166,35,.12);--danger:#f05555;--danger-bg:rgba(240,85,85,.12);--info:#60a5fa;--info-bg:rgba(96,165,250,.12);
+  --space-1:.25rem;--space-2:.5rem;--space-3:.75rem;--space-4:1rem;--space-5:1.5rem;--space-6:2rem;--space-8:3rem;
+  --text-xs:.75rem;--text-sm:.8125rem;--text-base:.875rem;--text-md:1rem;--text-lg:1.125rem;--text-xl:1.5rem;--text-2xl:2rem;
 }
 *{box-sizing:border-box}
 html,body{margin:0;padding:0}
 body{font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--fg);line-height:1.45;transition:background .2s,color .2s}
 a{color:var(--link)}
 h1,h2,h3{margin:0 0 .8rem}
-h2{font-size:1.1rem}
+h2{font-size:var(--text-lg);margin:0 0 var(--space-3)}
 p{margin:.35rem 0 .75rem}
 article{background:var(--card-bg);border:1px solid var(--card-border);border-radius:10px;padding:1rem;margin:0 0 1rem}
 button,input,select{font:inherit}
@@ -1037,20 +1071,32 @@ input,select{width:100%;max-width:100%;padding:.45rem .6rem;border:1px solid var
 input[type="checkbox"]{width:auto}
 button{padding:.45rem .85rem;border:1px solid var(--btn-border);border-radius:8px;background:var(--btn-bg);color:#fff;cursor:pointer}
 button:hover{filter:brightness(.95)}
+input:focus,select:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-subtle)}
 button.secondary{background:var(--btn2-bg);color:var(--btn2-fg);border-color:var(--btn2-border)}
+.btn-primary{background:var(--accent);color:#fff;border:1px solid var(--accent)}
+.btn-primary:hover{background:var(--accent-hover);border-color:var(--accent-hover)}
+.btn-danger{background:transparent;color:var(--danger);border:1px solid var(--danger)}
+.btn-danger:hover{background:var(--danger);color:#fff}
+.btn-sm{padding:.3rem .6rem;font-size:var(--text-xs)}
 code{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,Liberation Mono,monospace;font-size:.85em;background:var(--code-bg);border:1px solid var(--code-border);border-radius:6px;padding:.1rem .3rem}
 table{width:100%;font-size:.875rem;border-collapse:collapse;background:var(--table-bg);border:1px solid var(--table-border)}
 th,td{padding:.5rem .55rem;text-align:left;vertical-align:top;border-bottom:1px solid var(--row-border)}
 thead th{background:var(--thead-bg);font-weight:600}
 tr:last-child td{border-bottom:none}
+tbody tr:nth-child(even){background:var(--surface-alt)}
+tbody tr:hover{background:var(--accent-subtle)}
+article:has(>table){padding:0;overflow:hidden}
+article:has(>table) table{border:none}
 .admin-shell{display:grid;grid-template-columns:var(--sidebar-w) 1fr;min-height:100vh}
 .sidebar{background:var(--sidebar-bg);color:var(--sidebar-text);position:sticky;top:0;height:100vh;overflow-y:auto;display:flex;flex-direction:column}
 .sidebar-brand{padding:1rem 1.25rem;font-weight:700;font-size:1rem;color:#fff;letter-spacing:.02em;border-bottom:1px solid rgba(255,255,255,.08)}
 .sidebar nav{display:flex;flex-direction:column;padding:.5rem 0;flex:1}
 .sidebar nav a{display:block;padding:.5rem 1.25rem;color:var(--sidebar-text);text-decoration:none;font-size:.875rem;transition:background .15s,color .15s}
 .sidebar nav a:hover{background:rgba(255,255,255,.07);color:#fff}
-.sidebar nav a[aria-current="page"]{background:var(--sidebar-active-bg);color:var(--sidebar-active);font-weight:600}
+.sidebar nav a[aria-current="page"]{background:var(--sidebar-active-bg);color:var(--sidebar-active);font-weight:600;border-left:3px solid var(--accent)}
 .nav-sep{height:1px;background:rgba(255,255,255,.08);margin:.4rem .75rem}
+.nav-label{padding:.6rem 1.25rem .2rem;font-size:.65rem;text-transform:uppercase;letter-spacing:.1em;color:rgba(255,255,255,.35);font-weight:600}
+.sidebar-footer{padding:.75rem 1.25rem;font-size:.7rem;color:rgba(255,255,255,.25);border-top:1px solid rgba(255,255,255,.08);margin-top:auto}
 .main-area{display:flex;flex-direction:column;min-height:100vh}
 .topbar{height:var(--topbar-h);display:flex;align-items:center;padding:0 1.5rem;gap:1rem;background:var(--topbar-bg);border-bottom:1px solid var(--topbar-border);position:sticky;top:0;z-index:10;transition:background .2s,border-color .2s}
 .topbar-title{font-weight:600;font-size:1rem;flex:1}
@@ -1061,17 +1107,27 @@ tr:last-child td{border-bottom:none}
 .theme-toggle{background:none;border:1px solid var(--input-border);border-radius:8px;color:var(--fg);padding:.3rem .6rem;font-size:.85rem;cursor:pointer;line-height:1}
 .theme-toggle:hover{background:var(--input-bg)}
 main.container-fluid{padding:1.5rem;flex:1}
-.flash{display:flex;align-items:center;justify-content:space-between;padding:.75rem 1rem;border-radius:8px;margin-bottom:1rem;font-size:.9rem}
-.flash-ok{background:#d1f0da;color:#1a5e2e;border:1px solid #a8ddb5}
-.flash-err{background:#fde8e8;color:#7b1a1a;border:1px solid #f5b7b7}
+.flash{display:flex;align-items:center;justify-content:space-between;padding:var(--space-3) var(--space-4);border-radius:8px;margin-bottom:var(--space-4);font-size:var(--text-base)}
+.flash-ok{background:var(--success-bg);color:#1a5e2e;border:1px solid var(--success);border-left:4px solid var(--success)}
+.flash-err{background:var(--danger-bg);color:#7b1a1a;border:1px solid var(--danger);border-left:4px solid var(--danger)}
 .flash-close{background:none;border:none;font-size:1.2rem;cursor:pointer;color:inherit;padding:0 .25rem;line-height:1}
 .stat-cards{display:grid;grid-template-columns:repeat(4,1fr);gap:1rem;margin-bottom:1.5rem}
-.stat-card{text-align:center;padding:1.25rem}
+.stat-card{text-align:center;padding:var(--space-5);position:relative}
+.stat-card::before{content:'';position:absolute;left:0;top:0;bottom:0;width:4px;border-radius:10px 0 0 10px}
+.stat-card:nth-child(1)::before{background:var(--accent)}
+.stat-card:nth-child(2)::before{background:var(--success)}
+.stat-card:nth-child(3)::before{background:var(--warning)}
+.stat-card:nth-child(4)::before{background:var(--info)}
+.stat-icon{font-size:1.5rem;margin-bottom:var(--space-1)}
 .stat-number{display:block;font-size:2rem;font-weight:700;line-height:1.1}
 .stat-label{display:block;font-size:.8rem;color:var(--muted);margin-top:.25rem;text-transform:uppercase;letter-spacing:.05em}
 .badge{display:inline-block;padding:.2em .55em;border-radius:99px;font-size:.75rem;font-weight:600;color:#fff;white-space:nowrap}
 form{margin-bottom:0}
 figure{overflow-x:auto;margin:0 0 1rem}
+.form-inline{display:flex;gap:var(--space-2);flex-wrap:wrap;margin-bottom:var(--space-5)}
+.form-grid{display:grid;gap:var(--space-2);margin-bottom:var(--space-5)}
+.form-grid-2{grid-template-columns:repeat(2,minmax(160px,1fr))}
+.form-grid-4{grid-template-columns:repeat(4,minmax(160px,1fr))}
 .checkbox-group{display:flex;gap:.75rem;flex-wrap:wrap}
 .checkbox-item{display:flex;align-items:center;gap:.35rem;white-space:nowrap}
 .membership-create-form{display:grid;grid-template-columns:repeat(2,minmax(220px,1fr));gap:.85rem;margin-bottom:1.5rem}
@@ -1094,7 +1150,9 @@ figure{overflow-x:auto;margin:0 0 1rem}
 document.querySelectorAll('.flash').forEach(function(el){
   var btn=el.querySelector('.flash-close');
   if(btn)btn.addEventListener('click',function(){el.remove()});
-  setTimeout(function(){if(el.parentNode)el.remove()},4000);
+});
+document.querySelectorAll('.flash-ok').forEach(function(el){
+  setTimeout(function(){if(el.parentNode)el.remove()},5000);
 });
 (function(){
   var root=document.documentElement;
@@ -1372,8 +1430,8 @@ def login_page(request: Request, next: str = "/admin/ui", error: str | None = No
   <link rel="icon" type="image/png" href="/admin/ui/favicon.png">
   <script>document.documentElement.dataset.theme=localStorage.getItem('wff-theme')||(window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light');</script>
   <style>
-:root{{--bg:#f5f7fb;--fg:#1f2937;--card-bg:#fff;--card-border:#d7dce3;--input-bg:#fff;--input-border:#cbd5e1;--input-fg:#111827;--muted:#64748b;--btn-bg:#0f172a;--btn-border:#0f172a}}
-[data-theme="dark"]{{--bg:#0f1117;--fg:#e2e8f0;--card-bg:#1e2433;--card-border:#2d3748;--input-bg:#2d3748;--input-border:#4a5568;--input-fg:#e2e8f0;--muted:#94a3b8;--btn-bg:#334155;--btn-border:#475569}}
+:root{{--bg:#f8f9fc;--fg:#1a1d26;--card-bg:#fff;--card-border:#e2e5ed;--input-bg:#fff;--input-border:#e2e5ed;--input-fg:#1a1d26;--muted:#8b92a8;--btn-bg:#4f6ef7;--btn-border:#4f6ef7;--accent:#4f6ef7;--accent-subtle:#eef1fe}}
+[data-theme="dark"]{{--bg:#0c0e14;--fg:#e8eaf0;--card-bg:#181c28;--card-border:#2a3045;--input-bg:#1e2333;--input-border:#2a3045;--input-fg:#e8eaf0;--muted:#6b7290;--btn-bg:#6b8aff;--btn-border:#6b8aff;--accent:#6b8aff;--accent-subtle:#1e2545}}
 *{{box-sizing:border-box}}
 html,body{{margin:0;padding:0}}
 body{{display:flex;align-items:center;justify-content:center;min-height:100vh;padding:1rem;font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--fg)}}
@@ -1382,11 +1440,12 @@ body{{display:flex;align-items:center;justify-content:center;min-height:100vh;pa
 .login-brand{{text-align:center;margin-bottom:1.5rem}}
 .login-brand h1{{font-size:1.5rem;margin:0}}
 .login-brand p{{color:var(--muted);font-size:.875rem;margin:.25rem 0 0}}
-.login-error{{color:#7b1a1a;background:#fde8e8;border:1px solid #f5b7b7;border-radius:8px;padding:.6rem .9rem;font-size:.875rem}}
+.login-error{{color:#7b1a1a;background:#fef0f0;border:1px solid #e53535;border-left:4px solid #e53535;border-radius:8px;padding:.6rem .9rem;font-size:.875rem}}
 label{{display:block;margin:.45rem 0 .2rem}}
 input{{width:100%;max-width:100%;padding:.5rem .6rem;border:1px solid var(--input-border);border-radius:8px;background:var(--input-bg);color:var(--input-fg);font:inherit}}
 button{{margin-top:.65rem;width:100%;padding:.5rem .85rem;border:1px solid var(--btn-border);border-radius:8px;background:var(--btn-bg);color:#fff;cursor:pointer;font:inherit}}
 button:hover{{filter:brightness(.95)}}
+input:focus{{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-subtle)}}
 .lang-footer{{text-align:center;margin-top:1rem;font-size:.8rem;color:var(--muted)}}
 .lang-footer a{{color:inherit}}
   </style>
@@ -1483,7 +1542,7 @@ def dashboard(request: Request):
     bulk_form = ""
     if selected_run_id:
         bulk_form = f"""
-    <form method="post" action="/admin/ui/discovery/runs/{_esc(selected_run_id)}/import-bulk" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:.8rem;">
+    <form method="post" action="/admin/ui/discovery/runs/{_esc(selected_run_id)}/import-bulk" class="form-inline" style="margin-bottom:.8rem;">
       <label>{t("label_import_mode")}
         <select name="mode">
           <option value="auto_merge_by_mac">{t("option_auto_merge_by_mac")}</option>
@@ -1491,29 +1550,31 @@ def dashboard(request: Request):
         </select>
       </label>
       <input name="name_prefix" placeholder="discovered" />
-      <label style="display:flex;align-items:center;gap:6px;"><input type="checkbox" name="apply_power_settings" value="1" checked />power settings</label>
-      <label style="display:flex;align-items:center;gap:6px;"><input type="checkbox" name="skip_without_mac" value="1" checked />skip without mac</label>
+      <label class="checkbox-item"><input type="checkbox" name="apply_power_settings" value="1" checked />power settings</label>
+      <label class="checkbox-item"><input type="checkbox" name="skip_without_mac" value="1" checked />skip without mac</label>
       <button type="submit">{t("action_bulk_import")}</button>
     </form>
         """
 
+    wake_log_rows = "".join(f"<tr><td>{_short_id(row['id'])}</td><td>{_device_cell(row['host_id'], device_name_map)}</td><td>{_esc(row['actor_username'])}</td><td>{_badge(str(row['result']))}</td><td>{_esc(row['created_at'])}</td></tr>" for row in wake_logs)
+    power_log_rows = "".join(f"<tr><td>{_short_id(row['id'])}</td><td>{_device_cell(row['device_id'], device_name_map)}</td><td>{_badge(str(row['method']))}</td><td>{_badge(str(row['result']))}</td><td>{_esc(row['created_at'])}</td></tr>" for row in power_logs)
     body = f"""
     <div class="stat-cards">
-      <article class="stat-card"><strong class="stat-number">{len(users)}</strong><span class="stat-label">{t("card_users")}</span></article>
-      <article class="stat-card"><strong class="stat-number">{len(devices)}</strong><span class="stat-label">{t("card_devices")}</span></article>
-      <article class="stat-card"><strong class="stat-number">{len(scheduled_wakes)}</strong><span class="stat-label">{t("card_scheduled_wakes")}</span></article>
-      <article class="stat-card"><strong class="stat-number">{len(memberships)}</strong><span class="stat-label">{t("card_device_access")}</span></article>
+      <article class="stat-card"><div class="stat-icon">\U0001F465</div><strong class="stat-number">{len(users)}</strong><span class="stat-label">{t("card_users")}</span></article>
+      <article class="stat-card"><div class="stat-icon">\U0001F4BB</div><strong class="stat-number">{len(devices)}</strong><span class="stat-label">{t("card_devices")}</span></article>
+      <article class="stat-card"><div class="stat-icon">\u23F0</div><strong class="stat-number">{len(scheduled_wakes)}</strong><span class="stat-label">{t("card_scheduled_wakes")}</span></article>
+      <article class="stat-card"><div class="stat-icon">\U0001F511</div><strong class="stat-number">{len(memberships)}</strong><span class="stat-label">{t("card_device_access")}</span></article>
     </div>
     <h2>{t("heading_recent_wake_logs")}</h2>
-    <figure><table>
+    <article><table>
       <thead><tr><th>{t("col_id")}</th><th>{t("col_device")}</th><th>{t("col_actor")}</th><th>{t("col_result")}</th><th>{t("col_time")}</th></tr></thead>
-      <tbody>{"".join(f"<tr><td>{row['id']}</td><td>{_device_cell(row['host_id'], device_name_map)}</td><td>{_esc(row['actor_username'])}</td><td>{_badge(str(row['result']))}</td><td>{_esc(row['created_at'])}</td></tr>" for row in wake_logs)}</tbody>
-    </table></figure>
+      <tbody>{wake_log_rows or _empty_row(request, 5)}</tbody>
+    </table></article>
     <h2>{t("heading_recent_power_checks")}</h2>
-    <figure><table>
+    <article><table>
       <thead><tr><th>{t("col_id")}</th><th>{t("col_device")}</th><th>{t("col_method")}</th><th>{t("col_result")}</th><th>{t("col_time")}</th></tr></thead>
-      <tbody>{"".join(f"<tr><td>{row['id']}</td><td>{_device_cell(row['device_id'], device_name_map)}</td><td>{_badge(str(row['method']))}</td><td>{_badge(str(row['result']))}</td><td>{_esc(row['created_at'])}</td></tr>" for row in power_logs)}</tbody>
-    </table></figure>
+      <tbody>{power_log_rows or _empty_row(request, 5)}</tbody>
+    </table></article>
     """
     return _layout(request, t("title_admin_dashboard"), body, user["username"], message=message, error=error)
 
@@ -1529,9 +1590,9 @@ def users_page(request: Request):
     table_rows = "".join(
         f"""
         <tr>
-          <td>{row['id']}</td><td>{_esc(row['username'])}</td><td>{_badge(str(row['role']))}</td><td>{_esc(row['created_at'])}</td>
+          <td>{_short_id(row['id'])}</td><td>{_esc(row['username'])}</td><td>{_badge(str(row['role']))}</td><td>{_esc(row['created_at'])}</td>
           <td>
-            <form method="post" action="/admin/ui/users/{row['id']}/update" style="display:flex;gap:6px;flex-wrap:wrap;">
+            <form method="post" action="/admin/ui/users/{row['id']}/update" class="form-inline">
               <select name="role">
                 <option value="user" {"selected" if row['role']=="user" else ""}>user</option>
                 <option value="admin" {"selected" if row['role']=="admin" else ""}>admin</option>
@@ -1542,7 +1603,7 @@ def users_page(request: Request):
           </td>
           <td>
             <form method="post" action="/admin/ui/users/{row['id']}/delete" data-confirm="{_esc(t('confirm_delete_user', username=str(row['username'])))}">
-              <button type="submit" class="secondary">{t("action_delete")}</button>
+              <button type="submit" class="btn-danger">{t("action_delete")}</button>
             </form>
           </td>
         </tr>
@@ -1550,18 +1611,20 @@ def users_page(request: Request):
         for row in rows
     )
     body = f"""
+    <article>
     <h2>{t("heading_create_user")}</h2>
-    <form method="post" action="/admin/ui/users/create" autocomplete="off" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:1.5rem;">
+    <form method="post" action="/admin/ui/users/create" autocomplete="off" class="form-inline">
       <input required name="username" placeholder="{t("placeholder_username")}" />
       <input required name="password" type="password" placeholder="{t("placeholder_password_min12")}" />
       <select name="role"><option value="user">user</option><option value="admin">admin</option></select>
       <button type="submit">{t("action_create")}</button>
     </form>
+    </article>
     <h2>{t("heading_users")}</h2>
-    <figure><table>
+    <article><table>
       <thead><tr><th>{t("col_id")}</th><th>{t("col_username")}</th><th>{t("col_role")}</th><th>{t("col_created")}</th><th>{t("col_update")}</th><th>{t("col_delete")}</th></tr></thead>
-      <tbody>{table_rows}</tbody>
-    </table></figure>
+      <tbody>{table_rows or _empty_row(request, 6)}</tbody>
+    </table></article>
     """
     return _layout(request, t("title_users"), body, user["username"], message=message, error=error)
 
@@ -1656,7 +1719,7 @@ def devices_page(request: Request):
     table_rows = "".join(
         f"""
         <tr>
-          <td>{_esc(row['id'])}</td><td>{_esc(row['name'])}</td><td>{_esc(row['display_name'])}</td><td>{_esc(row['mac'])}</td>
+          <td>{_short_id(row['id'])}</td><td>{_esc(row['name'])}</td><td>{_esc(row['display_name'])}</td><td>{_esc(row['mac'])}</td>
           <td>{_esc(row['check_method'])}</td><td>{_esc(row['check_target'])}</td><td>{_esc(row['check_port'])}</td>
           <td>{_esc(row['last_power_state'])}</td><td>{_esc(row['last_power_checked_at'])}</td>
           <td>{"<br/>".join(_esc(hint) for hint in device_diagnostic_hints(dict(row)))}</td>
@@ -1686,15 +1749,16 @@ def devices_page(request: Request):
           </td>
           <td>
             <form method="post" action="/admin/ui/devices/{_esc(row['id'])}/test-power-check"><button type="submit" class="secondary">{t("action_test_power_check")}</button></form>
-            <form method="post" action="/admin/ui/devices/{_esc(row['id'])}/delete" data-confirm="{_esc(t('confirm_delete_device', device=str(row['name'])))}"><button type="submit" class="secondary">{t("action_delete")}</button></form>
+            <form method="post" action="/admin/ui/devices/{_esc(row['id'])}/delete" data-confirm="{_esc(t('confirm_delete_device', device=str(row['name'])))}"><button type="submit" class="btn-danger">{t("action_delete")}</button></form>
           </td>
         </tr>
         """
         for row in rows
     )
     body = f"""
+    <article>
     <h2>{t("heading_create_device")}</h2>
-    <form method="post" action="/admin/ui/devices/create" autocomplete="off" style="display:grid;grid-template-columns:repeat(4,minmax(160px,1fr));gap:8px;margin-bottom:1.5rem;">
+    <form method="post" action="/admin/ui/devices/create" autocomplete="off" class="form-grid form-grid-4">
       <input required name="name" placeholder="{t("placeholder_name")}" />
       <input name="display_name" placeholder="{t("placeholder_display_name")}" />
       <input required name="mac" placeholder="AA:BB:CC:DD:EE:FF" />
@@ -1710,11 +1774,12 @@ def devices_page(request: Request):
       <input name="check_port" placeholder="{t("placeholder_check_port")}" />
       <button type="submit">{t("action_create")}</button>
     </form>
+    </article>
     <h2>{t("heading_devices")}</h2>
-    <figure><table>
+    <article><table>
       <thead><tr><th>{t("col_id")}</th><th>{t("col_name")}</th><th>{t("col_display")}</th><th>{t("col_mac")}</th><th>{t("col_method")}</th><th>{t("col_target")}</th><th>{t("col_port")}</th><th>{t("col_state")}</th><th>{t("col_checked_at")}</th><th>{t("col_diagnostics")}</th><th>{t("col_schedules")}</th><th>{t("col_update")}</th><th>{t("col_actions")}</th></tr></thead>
-      <tbody>{table_rows}</tbody>
-    </table></figure>
+      <tbody>{table_rows or _empty_row(request, 13)}</tbody>
+    </table></article>
     """
     return _layout(request, t("title_devices"), body, admin["username"], message=message, error=error)
 
@@ -1937,7 +2002,7 @@ def scheduled_wakes_page(
               </form>
               <form method="post" action="/admin/ui/scheduled-wakes/{_esc(row['id'])}/delete" data-confirm="{_esc(t('confirm_delete_schedule', label=str(row['label'])))}">
                 <input type="hidden" name="return_to" value="{_esc(_schedule_filter_path(request, device_id=selected_device_id or None, enabled=enabled_filter))}" />
-                <button type="submit" class="secondary">{t("action_delete")}</button>
+                <button type="submit" class="btn-danger">{t("action_delete")}</button>
               </form>
             </div>
           </td>
@@ -1965,7 +2030,7 @@ def scheduled_wakes_page(
     </div>
     <article>
       <h2>{t("heading_schedule_filters")}</h2>
-      <form method="get" action="/admin/ui/scheduled-wakes" style="display:flex;gap:8px;flex-wrap:wrap;align-items:end;">
+      <form method="get" action="/admin/ui/scheduled-wakes" class="form-inline" style="align-items:end;">
         <input type="hidden" name="lang" value="{_esc(_lang(request))}" />
         <label class="stacked-cell">{t("col_device")}
           <select name="device_id">{device_options}</select>
@@ -1976,15 +2041,15 @@ def scheduled_wakes_page(
         <button type="submit">{t("action_filter")}</button>
       </form>
     </article>
-    <figure><table>
+    <article><table>
       <thead><tr><th>{t("col_label")}</th><th>{t("col_device")}</th><th>{t("col_enabled")}</th><th>{t("col_timezone")}</th><th>{t("col_days")}</th><th>{t("col_local_time")}</th><th>{t("col_next_run")}</th><th>{t("col_last_run")}</th><th>{t("col_recent_result")}</th><th>{t("col_actions")}</th></tr></thead>
       <tbody>{rows_html}</tbody>
-    </table></figure>
+    </table></article>
     <h2>{t("heading_recent_scheduled_wake_runs")}</h2>
-    <figure><table>
+    <article><table>
       <thead><tr><th>{t("col_label")}</th><th>{t("col_device")}</th><th>{t("col_result")}</th><th>{t("col_detail")}</th><th>{t("col_started_at")}</th><th>{t("col_finished_at")}</th></tr></thead>
       <tbody>{runs_html}</tbody>
-    </table></figure>
+    </table></article>
     """
     return _layout(request, t("title_scheduled_wakes"), body, admin["username"], message=message, error=error)
 
@@ -2309,7 +2374,7 @@ def device_memberships_page(request: Request):
           </td>
           <td>
             <form method="post" action="/admin/ui/device-memberships/{_esc(row['id'])}/delete" data-confirm="{_esc(t('confirm_remove_device_access', username=str(row['username']), device=_device_membership_device_label(dict(row))))}">
-              <button type="submit" class="secondary">{t("action_remove")}</button>
+              <button type="submit" class="btn-danger">{t("action_remove")}</button>
             </form>
           </td>
         </tr>
@@ -2317,6 +2382,7 @@ def device_memberships_page(request: Request):
         for row in memberships
     )
     body = f"""
+    <article>
     <h2>{t("heading_grant_device_access")}</h2>
     <form method="post" action="/admin/ui/device-memberships/create" class="membership-create-form">
       <label class="stacked-cell">{t("col_user")}<select name="user_id">{user_opts}</select></label>
@@ -2333,8 +2399,9 @@ def device_memberships_page(request: Request):
         <button type="submit">{t("action_grant_access")}</button>
       </div>
     </form>
+    </article>
     <h2>{t("heading_device_access")}</h2>
-    <figure><table class="membership-table">
+    <article><table class="membership-table">
       <thead>
         <tr>
           <th>{t("col_user")}</th>
@@ -2351,8 +2418,8 @@ def device_memberships_page(request: Request):
           <th>{t("col_delete")}</th>
         </tr>
       </thead>
-      <tbody>{rows}</tbody>
-    </table></figure>
+      <tbody>{rows or _empty_row(request, 12)}</tbody>
+    </table></article>
     """
     return _layout(request, t("title_device_access"), body, admin["username"], message=message, error=error)
 
@@ -2604,12 +2671,13 @@ def wake_logs_page(
     device_name_map = {str(h["id"]): str(h["name"]) for h in list_hosts()}
     message, error = _msg(request)
     body_rows = "".join(
-        f"<tr><td>{row['id']}</td><td>{_device_cell(row['host_id'], device_name_map)}</td><td>{_esc(row['actor_username'])}</td><td>{_badge(str(row['result']))}</td><td>{_esc(row['precheck_state'])}</td><td>{_esc(row['error_detail'])}</td><td>{_esc(row['created_at'])}</td></tr>"
+        f"<tr><td>{_short_id(row['id'])}</td><td>{_device_cell(row['host_id'], device_name_map)}</td><td>{_esc(row['actor_username'])}</td><td>{_badge(str(row['result']))}</td><td>{_esc(row['precheck_state'])}</td><td>{_esc(row['error_detail'])}</td><td>{_esc(row['created_at'])}</td></tr>"
         for row in rows
     )
     body = f"""
+    <article>
     <h2>{t("heading_wake_logs")}</h2>
-    <form method="get" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:1rem;">
+    <form method="get" class="form-inline">
       <input name="host_id" value="{_esc(host_id)}" placeholder="{t("placeholder_host_id_filter")}" />
       <input name="actor" value="{_esc(actor)}" placeholder="{t("placeholder_actor_filter")}" />
       <select name="result">
@@ -2621,10 +2689,11 @@ def wake_logs_page(
       <input name="limit" value="{limit}" style="width:80px" />
       <button type="submit">{t("action_filter")}</button>
     </form>
-    <figure><table>
+    </article>
+    <article><table>
       <thead><tr><th>{t("col_id")}</th><th>{t("col_host_id")}</th><th>{t("col_actor")}</th><th>{t("col_result")}</th><th>{t("col_precheck")}</th><th>{t("col_error")}</th><th>{t("col_created")}</th></tr></thead>
-      <tbody>{body_rows}</tbody>
-    </table></figure>
+      <tbody>{body_rows or _empty_row(request, 7)}</tbody>
+    </table></article>
     """
     return _layout(request, t("title_wake_logs"), body, admin["username"], message=message, error=error)
 
@@ -2652,12 +2721,13 @@ def power_logs_page(
     device_name_map = {str(h["id"]): str(h["name"]) for h in list_hosts()}
     message, error = _msg(request)
     body_rows = "".join(
-        f"<tr><td>{row['id']}</td><td>{_device_cell(row['device_id'], device_name_map)}</td><td>{_badge(str(row['method']))}</td><td>{_badge(str(row['result']))}</td><td>{_esc(row['detail'])}</td><td>{_esc(row['latency_ms'])}</td><td>{_esc(row['created_at'])}</td></tr>"
+        f"<tr><td>{_short_id(row['id'])}</td><td>{_device_cell(row['device_id'], device_name_map)}</td><td>{_badge(str(row['method']))}</td><td>{_badge(str(row['result']))}</td><td>{_esc(row['detail'])}</td><td>{_esc(row['latency_ms'])}</td><td>{_esc(row['created_at'])}</td></tr>"
         for row in rows
     )
     body = f"""
+    <article>
     <h2>{t("heading_power_check_logs")}</h2>
-    <form method="get" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:1rem;">
+    <form method="get" class="form-inline">
       <input name="device_id" value="{_esc(device_id)}" placeholder="{t("placeholder_device_id_filter")}" />
       <select name="method">
         <option value="" {"selected" if not method else ""}>{t("option_all_methods")}</option>
@@ -2673,10 +2743,11 @@ def power_logs_page(
       <input name="limit" value="{limit}" style="width:80px" />
       <button type="submit">{t("action_filter")}</button>
     </form>
-    <figure><table>
+    </article>
+    <article><table>
       <thead><tr><th>{t("col_id")}</th><th>{t("col_device_id")}</th><th>{t("col_method")}</th><th>{t("col_result")}</th><th>{t("col_detail")}</th><th>{t("col_latency_ms")}</th><th>{t("col_created")}</th></tr></thead>
-      <tbody>{body_rows}</tbody>
-    </table></figure>
+      <tbody>{body_rows or _empty_row(request, 7)}</tbody>
+    </table></article>
     """
     return _layout(request, t("title_power_check_logs"), body, admin["username"], message=message, error=error)
 
@@ -2704,22 +2775,22 @@ def diagnostics_page(request: Request):
     rows = []
     for host in list_hosts():
         rows.append(
-            f"<tr><td>{_esc(host['id'])}</td><td>{_esc(host['name'])}</td><td>{'<br/>'.join(_esc(h) for h in device_diagnostic_hints(dict(host)))}</td></tr>"
+            f"<tr><td>{_short_id(host['id'])}</td><td>{_esc(host['name'])}</td><td>{'<br/>'.join(_esc(h) for h in device_diagnostic_hints(dict(host)))}</td></tr>"
         )
     networks = ", ".join(str(row) for row in network_diag["detected_ipv4_networks"]) or "-"
     body = f"""
     <h2>{t("heading_network_interfaces")}</h2>
     <p>{t("text_detected_networks")}: <strong>{_esc(networks)}</strong></p>
     <p>{t("text_multiple_networks_available")}: <strong>{t("value_yes") if network_diag["has_multiple_active_networks"] else t("value_no")}</strong></p>
-    <figure><table>
+    <article><table>
       <thead><tr><th>{t("col_interface")}</th><th>{t("col_ipv4")}</th><th>{t("col_netmask")}</th><th>{t("col_network")}</th><th>{t("col_broadcast")}</th><th>{t("col_up")}</th><th>{t("col_loopback")}</th></tr></thead>
-      <tbody>{''.join(network_rows)}</tbody>
-    </table></figure>
+      <tbody>{''.join(network_rows) or _empty_row(request, 7)}</tbody>
+    </table></article>
     <h2>{t("heading_device_diagnostics_hints")}</h2>
-    <figure><table>
+    <article><table>
       <thead><tr><th>{t("col_device_id")}</th><th>{t("col_name")}</th><th>{t("col_hints")}</th></tr></thead>
-      <tbody>{''.join(rows)}</tbody>
-    </table></figure>
+      <tbody>{''.join(rows) or _empty_row(request, 3)}</tbody>
+    </table></article>
     """
     message, error = _msg(request)
     return _layout(request, t("title_diagnostics"), body, admin["username"], message=message, error=error)
@@ -2766,7 +2837,7 @@ def discovery_page(request: Request, run_id: str = "", show_docker: str = ""):
         )
         run_rows.append(
             "<tr>"
-            f"<td><a href=\"{_with_lang(f'/admin/ui/discovery?run_id={_esc(row['id'])}', _lang(request))}\">{_esc(row['id'])}</a></td>"
+            f"<td><a href=\"{_with_lang(f'/admin/ui/discovery?run_id={_esc(row['id'])}', _lang(request))}\">{_short_id(row['id'])}</a></td>"
             f"<td>{_badge(str(row['status']))}</td>"
             f"<td>{_esc(summary_text)}</td>"
             f"<td>{_esc(row['created_at'])}</td>"
@@ -2791,13 +2862,13 @@ def discovery_page(request: Request, run_id: str = "", show_docker: str = ""):
         candidate_rows.append(
             f"""
             <tr>
-              <td>{_esc(row['id'])}</td>
+              <td>{_short_id(row['id'])}</td>
               <td>{_esc(row['hostname'])}</td>
               <td>{_esc(row['mac'])}</td>
               <td>{_esc(row['ip'])}</td>
               <td>{_badge(str(row['wol_confidence']))}</td>
               <td>{_esc(row['source_network_cidr'])}</td>
-              <td>{_esc(row['imported_host_id'])}</td>
+              <td>{_short_id(row['imported_host_id'])}</td>
               <td>{suggested_cell}</td>
               <td>
                 {suggested_action}
@@ -2816,7 +2887,7 @@ def discovery_page(request: Request, run_id: str = "", show_docker: str = ""):
         )
 
     event_rows = "".join(
-        f"<tr><td>{row['id']}</td><td>{_esc(row['event_type'])}</td><td>{_esc(row['candidate_id'])}</td><td>{_esc(row['detail'])}</td><td>{_esc(row['created_at'])}</td></tr>"
+        f"<tr><td>{_short_id(row['id'])}</td><td>{_esc(row['event_type'])}</td><td>{_short_id(row['candidate_id'])}</td><td>{_esc(row['detail'])}</td><td>{_esc(row['created_at'])}</td></tr>"
         for row in events
     )
     binding_text = ", ".join(
@@ -2826,7 +2897,7 @@ def discovery_page(request: Request, run_id: str = "", show_docker: str = ""):
     bulk_form = ""
     if selected_run_id:
         bulk_form = f"""
-    <form method="post" action="/admin/ui/discovery/runs/{_esc(selected_run_id)}/import-bulk" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:.8rem;">
+    <form method="post" action="/admin/ui/discovery/runs/{_esc(selected_run_id)}/import-bulk" class="form-inline" style="margin-bottom:.8rem;">
       <label>{t("label_import_mode")}
         <select name="mode">
           <option value="auto_merge_by_mac">{t("option_auto_merge_by_mac")}</option>
@@ -2834,29 +2905,31 @@ def discovery_page(request: Request, run_id: str = "", show_docker: str = ""):
         </select>
       </label>
       <input name="name_prefix" placeholder="discovered" />
-      <label style="display:flex;align-items:center;gap:6px;"><input type="checkbox" name="apply_power_settings" value="1" checked />power settings</label>
-      <label style="display:flex;align-items:center;gap:6px;"><input type="checkbox" name="skip_without_mac" value="1" checked />skip without mac</label>
+      <label class="checkbox-item"><input type="checkbox" name="apply_power_settings" value="1" checked />power settings</label>
+      <label class="checkbox-item"><input type="checkbox" name="skip_without_mac" value="1" checked />skip without mac</label>
       <button type="submit">{t("action_bulk_import")}</button>
     </form>
         """
 
     body = f"""
+    <article>
     <h2>{t("heading_discovery_scan")}</h2>
     <p>{t("text_active_sender_bindings")}: <strong>{binding_text}</strong></p>
-    <form method="post" action="/admin/ui/discovery/run" style="display:grid;grid-template-columns:repeat(4,minmax(170px,1fr));gap:8px;margin-bottom:1.5rem;">
+    <form method="post" action="/admin/ui/discovery/run" class="form-grid form-grid-4">
       <input name="network_cidrs" placeholder="{t("placeholder_network_cidrs")}" />
       <input name="power_ports" placeholder="{t("placeholder_power_ports")}" />
       <input name="power_timeout_ms" value="200" />
-      <label style="display:flex;align-items:center;gap:6px;"><input type="checkbox" name="host_probe_enabled" value="1" /> host probe</label>
+      <label class="checkbox-item"><input type="checkbox" name="host_probe_enabled" value="1" /> host probe</label>
       <input name="host_probe_timeout_ms" value="200" />
       <input name="max_hosts_per_network" value="{settings.discovery_default_host_cap}" />
       <button type="submit">{t("action_run_discovery")}</button>
     </form>
+    </article>
     <h2>{t("heading_discovery_runs")}</h2>
-    <figure><table>
+    <article><table>
       <thead><tr><th>{t("col_run_id")}</th><th>{t("col_status")}</th><th>{t("col_summary")}</th><th>{t("col_created")}</th></tr></thead>
-      <tbody>{''.join(run_rows)}</tbody>
-    </table></figure>
+      <tbody>{''.join(run_rows) or _empty_row(request, 4)}</tbody>
+    </table></article>
     <h2>{t("heading_discovery_candidates")}</h2>
     {bulk_form}
     <p style="margin-bottom:.5rem;font-size:.875rem;">
@@ -2867,15 +2940,15 @@ def discovery_page(request: Request, run_id: str = "", show_docker: str = ""):
         f"Show all ({docker_count} Docker containers hidden)</a>"
       )}
     </p>
-    <figure><table>
+    <article><table>
       <thead><tr><th>{t("col_id")}</th><th>{t("col_name")}</th><th>{t("col_mac")}</th><th>{t("col_ipv4")}</th><th>{t("col_wol_confidence")}</th><th>{t("col_source_network")}</th><th>{t("col_imported_host")}</th><th>{t("col_suggested_host")}</th><th>{t("col_actions")}</th></tr></thead>
-      <tbody>{''.join(candidate_rows)}</tbody>
-    </table></figure>
+      <tbody>{''.join(candidate_rows) or _empty_row(request, 9)}</tbody>
+    </table></article>
     <h2>Events</h2>
-    <figure><table>
+    <article><table>
       <thead><tr><th>{t("col_id")}</th><th>{t("col_action")}</th><th>{t("col_device_id")}</th><th>{t("col_detail")}</th><th>{t("col_created")}</th></tr></thead>
-      <tbody>{event_rows}</tbody>
-    </table></figure>
+      <tbody>{event_rows or _empty_row(request, 5)}</tbody>
+    </table></article>
     """
     message, error = _msg(request)
     return _layout(request, t("title_discovery"), body, admin["username"], message=message, error=error)
@@ -3139,15 +3212,15 @@ def audit_logs_page(request: Request):
     t = lambda key, **kwargs: _tr(request, key, **kwargs)
     rows = list_admin_audit_logs(limit=500)
     body_rows = "".join(
-        f"<tr><td>{row['id']}</td><td>{_esc(row['actor_username'])}</td><td>{_esc(row['action'])}</td><td>{_esc(row['target_type'])}</td><td>{_esc(row['target_id'])}</td><td>{_esc(row['detail'])}</td><td>{_esc(row['created_at'])}</td></tr>"
+        f"<tr><td>{_short_id(row['id'])}</td><td>{_esc(row['actor_username'])}</td><td>{_esc(row['action'])}</td><td>{_esc(row['target_type'])}</td><td>{_short_id(row['target_id'])}</td><td>{_esc(row['detail'])}</td><td>{_esc(row['created_at'])}</td></tr>"
         for row in rows
     )
     body = f"""
     <h2>{t("heading_admin_audit_logs")}</h2>
-    <figure><table>
+    <article><table>
       <thead><tr><th>{t("col_id")}</th><th>{t("col_actor")}</th><th>{t("col_action")}</th><th>{t("col_target_type")}</th><th>{t("col_target_id")}</th><th>{t("col_detail")}</th><th>{t("col_created")}</th></tr></thead>
-      <tbody>{body_rows}</tbody>
-    </table></figure>
+      <tbody>{body_rows or _empty_row(request, 7)}</tbody>
+    </table></article>
     """
     message, error = _msg(request)
     return _layout(request, t("title_audit_logs"), body, admin["username"], message=message, error=error)
@@ -3165,10 +3238,10 @@ def metrics_page(request: Request):
     )
     body = f"""
     <h2>{t("heading_runtime_counters")}</h2>
-    <figure><table>
+    <article><table>
       <thead><tr><th>{t("col_counter")}</th><th>{t("col_value")}</th></tr></thead>
-      <tbody>{rows}</tbody>
-    </table></figure>
+      <tbody>{rows or _empty_row(request, 2)}</tbody>
+    </table></article>
     """
     message, error = _msg(request)
     return _layout(request, t("title_metrics"), body, admin["username"], message=message, error=error)
