@@ -4,6 +4,7 @@ import SwiftUI
 @MainActor
 final class DevicesViewModel: ObservableObject {
     @Published private(set) var devices: [MyDevice] = []
+    @Published private(set) var deviceSections: [DeviceListSection] = []
     @Published private(set) var isLoading = false
     @Published private(set) var activeDeviceID: String?
     @Published private(set) var feedbackMessage: AppMessage?
@@ -12,7 +13,7 @@ final class DevicesViewModel: ObservableObject {
 
     private let sessionStore: SessionStore
     private let apiClient: APIClient
-    private var allAssignedDevices: [MyDevice] = []
+    private var allVisibleDevices: [MyDevice] = []
     private var hasLoaded = false
     private var followUpRefreshTask: Task<Void, Never>?
 
@@ -32,7 +33,8 @@ final class DevicesViewModel: ObservableObject {
         guard force || !hasLoaded else { return }
         guard let session = sessionStore.currentSession else {
             devices = []
-            allAssignedDevices = []
+            allVisibleDevices = []
+            deviceSections = []
             return
         }
 
@@ -44,12 +46,12 @@ final class DevicesViewModel: ObservableObject {
         }
 
         do {
-            allAssignedDevices = try await apiClient.fetchMyDevices(
+            allVisibleDevices = sortDevicesForPresentation(try await apiClient.fetchMyDevices(
                 baseURL: session.backendURL,
                 token: session.token
-            )
+            ))
             guard isCurrentSession(session) else { return }
-            devices = allAssignedDevices
+            applyDevicePresentation(allVisibleDevices)
             loadErrorMessage = nil
         } catch {
             guard isCurrentSession(session) else { return }
@@ -66,8 +68,43 @@ final class DevicesViewModel: ObservableObject {
         }
     }
 
+    func toggleFavorite(device: MyDevice) async {
+        guard let session = sessionStore.currentSession else { return }
+
+        activeDeviceID = device.id
+        defer { activeDeviceID = nil }
+
+        do {
+            let updatedDevice = try await apiClient.updateDevicePreferences(
+                hostID: device.id,
+                isFavorite: !device.isFavorite,
+                baseURL: session.backendURL,
+                token: session.token
+            )
+            guard isCurrentSession(session) else { return }
+            allVisibleDevices = sortDevicesForPresentation(
+                allVisibleDevices.map { existing in
+                    existing.id == updatedDevice.id ? updatedDevice : existing
+                }
+            )
+            applyDevicePresentation(allVisibleDevices)
+        } catch {
+            guard isCurrentSession(session) else { return }
+            if handleAuthenticationError(session: session, error: error) {
+                return
+            }
+            feedbackMessage = render(error: error, fallbackKey: "devices_preferences_error_generic")
+            feedbackTint = .red
+        }
+    }
+
     func wake(device: MyDevice) async {
         guard let session = sessionStore.currentSession else { return }
+        guard device.canWake else {
+            feedbackMessage = .localized("devices_wake_not_permitted")
+            feedbackTint = .orange
+            return
+        }
 
         activeDeviceID = device.id
         defer { activeDeviceID = nil }
@@ -116,13 +153,23 @@ final class DevicesViewModel: ObservableObject {
             if handleAuthenticationError(session: session, error: error) {
                 return
             }
-            feedbackMessage = render(error: error, fallbackKey: "devices_wake_error_generic")
-            feedbackTint = .red
+            if isForbidden(error) {
+                feedbackMessage = .localized("devices_wake_not_permitted")
+                feedbackTint = .orange
+            } else {
+                feedbackMessage = render(error: error, fallbackKey: "devices_wake_error_generic")
+                feedbackTint = .red
+            }
         }
     }
 
     func requestShutdown(device: MyDevice, note: String) async {
         guard let session = sessionStore.currentSession else { return }
+        guard device.canRequestShutdown else {
+            feedbackMessage = .localized("devices_shutdown_not_permitted")
+            feedbackTint = .orange
+            return
+        }
         let trimmedNote = note.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !isShutdownNoteTooLong(trimmedNote) else {
             feedbackMessage = .localized("devices_shutdown_note_limit")
@@ -148,8 +195,13 @@ final class DevicesViewModel: ObservableObject {
             if handleAuthenticationError(session: session, error: error) {
                 return
             }
-            feedbackMessage = render(error: error, fallbackKey: "devices_shutdown_error_generic")
-            feedbackTint = .red
+            if isForbidden(error) {
+                feedbackMessage = .localized("devices_shutdown_not_permitted")
+                feedbackTint = .orange
+            } else {
+                feedbackMessage = render(error: error, fallbackKey: "devices_shutdown_error_generic")
+                feedbackTint = .red
+            }
         }
     }
 
@@ -164,6 +216,15 @@ final class DevicesViewModel: ObservableObject {
             guard !Task.isCancelled else { return }
             await self?.refresh(force: true)
         }
+    }
+
+    private func applyDevicePresentation(_ devices: [MyDevice]) {
+        self.devices = devices
+        deviceSections = buildDeviceSections(
+            devices,
+            favoritesTitle: NSLocalizedString("devices_favorites_section", comment: ""),
+            fallbackGroupTitle: NSLocalizedString("devices_other_section", comment: "")
+        )
     }
 
     private func render(error: Error, fallbackKey: String) -> AppMessage {
@@ -187,6 +248,14 @@ final class DevicesViewModel: ObservableObject {
             return false
         }
         sessionStore.logout(message: .localized("session_expired_message"))
+        return true
+    }
+
+    private func isForbidden(_ error: Error) -> Bool {
+        guard let apiError = error as? APIClientError,
+              apiError.statusCode == 403 else {
+            return false
+        }
         return true
     }
 

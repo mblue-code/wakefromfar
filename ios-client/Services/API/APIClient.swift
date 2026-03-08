@@ -72,6 +72,29 @@ final class APIClient {
         )
     }
 
+    func updateDevicePreferences(
+        hostID: String,
+        isFavorite: Bool? = nil,
+        sortOrder: Int? = nil,
+        baseURL: URL,
+        token: String
+    ) async throws -> MyDevice {
+        try await send(
+            endpoint: .init(
+                path: "/me/devices/\(hostID)/preferences",
+                method: "PATCH",
+                body: try encoder.encode(
+                    DevicePreferencesUpdateRequest(
+                        isFavorite: isFavorite,
+                        sortOrder: sortOrder
+                    )
+                )
+            ),
+            baseURL: baseURL,
+            token: token
+        )
+    }
+
     func requestShutdownPoke(
         hostID: String,
         message: String?,

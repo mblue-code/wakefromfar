@@ -31,29 +31,6 @@ class OnboardingClaimResponse(BaseModel):
     backend_url_hint: str | None = None
 
 
-class HostOut(BaseModel):
-    id: str
-    name: str
-    mac: str
-    group_name: str | None = None
-    broadcast: str | None = None
-    subnet_cidr: str | None = None
-    udp_port: int = 9
-    source_ip: str | None = None
-    display_name: str | None = None
-    last_power_state: Literal["on", "off", "unknown"] = "unknown"
-    last_power_checked_at: datetime | None = None
-    is_stale: bool | None = None
-
-
-class WakeResponse(BaseModel):
-    ok: bool
-    sent_to: str
-    timestamp: datetime
-    result: Literal["sent", "failed"] | None = None
-    error_detail: str | None = None
-
-
 class AdminUserCreate(BaseModel):
     username: str
     password: str = Field(min_length=MIN_USER_PASSWORD_LENGTH)
@@ -127,17 +104,53 @@ class AdminDeviceOut(BaseModel):
     last_discovered_at: datetime | None = None
 
 
-class AssignmentCreate(BaseModel):
-    user_id: int
-    device_id: str
+class DevicePermissionsOut(BaseModel):
+    can_view_status: bool
+    can_wake: bool
+    can_request_shutdown: bool
+    can_manage_schedule: bool
 
 
-class AssignmentOut(BaseModel):
+class DeviceMembershipCreate(BaseModel):
     user_id: int
-    username: str
     device_id: str
-    device_name: str
+    can_view_status: bool = True
+    can_wake: bool = True
+    can_request_shutdown: bool = True
+    can_manage_schedule: bool = False
+    is_favorite: bool = False
+    sort_order: int = 0
+
+
+class DeviceMembershipUpdate(BaseModel):
+    can_view_status: bool | None = None
+    can_wake: bool | None = None
+    can_request_shutdown: bool | None = None
+    can_manage_schedule: bool | None = None
+    is_favorite: bool | None = None
+    sort_order: int | None = None
+
+
+class MyDevicePreferencesUpdate(BaseModel):
+    is_favorite: bool | None = None
+    sort_order: int | None = None
+
+
+class DeviceMembershipOut(BaseModel):
+    id: str
+    user_id: int
+    device_id: str
+    username: str | None = None
+    device_name: str | None = None
+    device_display_name: str | None = None
+    can_view_status: bool
+    can_wake: bool
+    can_request_shutdown: bool
+    can_manage_schedule: bool
+    is_favorite: bool
+    sort_order: int
     created_at: datetime
+    updated_at: datetime
 
 
 class InviteCreate(BaseModel):
@@ -160,15 +173,25 @@ class InviteCreateResponse(InviteOut):
     token: str
 
 
+class ScheduledWakeSummaryOut(BaseModel):
+    total_count: int
+    enabled_count: int
+    next_run_at: datetime | None = None
+
+
 class MyDeviceOut(BaseModel):
     id: str
     name: str
     display_name: str | None = None
     mac: str
     group_name: str | None = None
+    is_favorite: bool
+    sort_order: int
+    permissions: DevicePermissionsOut
     last_power_state: Literal["on", "off", "unknown"] = "unknown"
     last_power_checked_at: datetime | None = None
     is_stale: bool
+    scheduled_wake_summary: ScheduledWakeSummaryOut | None = None
 
 
 class ActivityEventOut(BaseModel):
@@ -238,6 +261,51 @@ class MeWakeResponse(BaseModel):
     sent_to: str | None = None
     timestamp: datetime
     error_detail: str | None = None
+
+
+class ScheduledWakeCreate(BaseModel):
+    device_id: str
+    label: str
+    enabled: bool = True
+    timezone: str
+    days_of_week: list[str]
+    local_time: str
+
+
+class ScheduledWakeUpdate(BaseModel):
+    device_id: str | None = None
+    label: str | None = None
+    enabled: bool | None = None
+    timezone: str | None = None
+    days_of_week: list[str] | None = None
+    local_time: str | None = None
+
+
+class ScheduledWakeOut(BaseModel):
+    id: str
+    device_id: str
+    device_name: str | None = None
+    device_display_name: str | None = None
+    label: str
+    enabled: bool
+    timezone: str
+    days_of_week: list[str]
+    local_time: str
+    next_run_at: datetime | None = None
+    last_run_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class ScheduledWakeRunOut(BaseModel):
+    id: str
+    job_id: str
+    device_id: str
+    started_at: datetime
+    finished_at: datetime | None = None
+    result: Literal["sent", "already_on", "failed", "skipped"]
+    detail: str | None = None
+    wake_log_id: int | None = None
 
 
 class DiscoverySourceBinding(BaseModel):

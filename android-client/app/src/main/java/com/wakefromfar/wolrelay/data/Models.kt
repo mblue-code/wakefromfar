@@ -16,15 +16,55 @@ data class LoginResponse(
 )
 
 @Serializable
+data class DevicePermissionsDto(
+    val can_view_status: Boolean = true,
+    val can_wake: Boolean = true,
+    val can_request_shutdown: Boolean = true,
+    val can_manage_schedule: Boolean = false,
+)
+
+@Serializable
+data class ScheduledWakeSummaryDto(
+    val total_count: Int = 0,
+    val enabled_count: Int = 0,
+    val next_run_at: String? = null,
+)
+
+@Serializable
 data class MyDeviceDto(
     val id: String,
     val name: String,
     val display_name: String? = null,
     val group_name: String? = null,
     val mac: String,
+    val is_favorite: Boolean = false,
+    val sort_order: Int = 0,
+    val permissions: DevicePermissionsDto = DevicePermissionsDto(),
     val last_power_state: String = "unknown",
     val last_power_checked_at: String? = null,
     val is_stale: Boolean = true,
+    val scheduled_wake_summary: ScheduledWakeSummaryDto? = null,
+) {
+    val displayTitle: String
+        get() = display_name?.takeIf { it.isNotBlank() } ?: name
+
+    val canViewStatus: Boolean
+        get() = permissions.can_view_status
+
+    val canWake: Boolean
+        get() = permissions.can_wake
+
+    val canRequestShutdown: Boolean
+        get() = permissions.can_request_shutdown
+
+    val canManageSchedule: Boolean
+        get() = permissions.can_manage_schedule
+}
+
+@Serializable
+data class MyDevicePreferencesUpdateRequest(
+    val is_favorite: Boolean? = null,
+    val sort_order: Int? = null,
 )
 
 @Serializable

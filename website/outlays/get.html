@@ -1,0 +1,487 @@
+<!DOCTYPE html>
+<html lang="de" class="lang-de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Outlays herunterladen – bluecherlab</title>
+  <meta name="robots" content="noindex">
+  <link rel="stylesheet" href="../style.css">
+  <style>
+    /* ===== Get page specific ===== */
+    .get-intro {
+      padding: 4rem 0 3rem;
+      text-align: center;
+    }
+
+    .get-intro h1 {
+      font-size: clamp(1.8rem, 4vw, 2.5rem);
+      font-weight: 700;
+      letter-spacing: -0.03em;
+      margin-bottom: 0.75rem;
+    }
+
+    .get-intro p {
+      font-size: 1rem;
+      color: var(--muted);
+      max-width: 50ch;
+      margin: 0 auto;
+      line-height: 1.7;
+    }
+
+    .oss-statement {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin-top: 1.5rem;
+      font-size: 0.82rem;
+      color: var(--dim);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      padding: 0.4rem 0.9rem;
+      border-radius: 999px;
+    }
+
+    .oss-statement svg { color: var(--green); flex-shrink: 0; }
+
+    /* ===== Pricing grid ===== */
+    .pricing-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1.25rem;
+      margin-top: 3rem;
+    }
+
+    .pricing-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--r-lg);
+      padding: 2rem;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .pricing-card.featured {
+      border-color: rgba(91,110,240,0.45);
+      background: linear-gradient(160deg, rgba(91,110,240,0.06) 0%, var(--surface) 60%);
+    }
+
+    .pricing-tier {
+      font-size: 0.72rem;
+      font-weight: 600;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--dim);
+      margin-bottom: 1rem;
+    }
+
+    .pricing-card.featured .pricing-tier {
+      color: var(--accent-h);
+    }
+
+    .pricing-price {
+      margin-bottom: 0.3rem;
+    }
+
+    .pricing-price .amount {
+      font-size: 2.25rem;
+      font-weight: 800;
+      letter-spacing: -0.04em;
+      color: var(--text);
+    }
+
+    .pricing-price .period {
+      font-size: 0.85rem;
+      color: var(--muted);
+      margin-left: 0.25rem;
+    }
+
+    .pricing-desc {
+      font-size: 0.875rem;
+      color: var(--muted);
+      line-height: 1.6;
+      margin-bottom: 1.75rem;
+      flex: 1;
+    }
+
+    .pricing-features {
+      list-style: none;
+      padding: 0;
+      margin: 0 0 2rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.6rem;
+    }
+
+    .pricing-features li {
+      display: flex;
+      align-items: flex-start;
+      gap: 0.6rem;
+      font-size: 0.875rem;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+
+    .pricing-features li svg {
+      flex-shrink: 0;
+      margin-top: 0.15rem;
+      color: var(--green);
+    }
+
+    .pricing-features li.muted svg { color: var(--dim); }
+    .pricing-features li.muted { color: var(--dim); }
+
+    .pricing-actions {
+      display: flex;
+      flex-direction: column;
+      gap: 0.6rem;
+      margin-top: auto;
+    }
+
+    .btn-primary {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      padding: 0.75rem 1.25rem;
+      border-radius: var(--radius);
+      font-family: var(--font);
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      text-decoration: none;
+      transition: background var(--trans), transform var(--trans);
+    }
+
+    .btn-primary:hover {
+      background: var(--accent-h);
+      color: #fff;
+      transform: translateY(-1px);
+    }
+
+    .btn-primary:disabled,
+    .btn-primary.soon {
+      opacity: 0.45;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    .btn-secondary {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      padding: 0.65rem 1.25rem;
+      border-radius: var(--radius);
+      font-family: var(--font);
+      font-size: 0.875rem;
+      font-weight: 500;
+      cursor: pointer;
+      background: transparent;
+      color: var(--muted);
+      border: 1px solid var(--border);
+      text-decoration: none;
+      transition: border-color var(--trans), color var(--trans);
+    }
+
+    .btn-secondary:hover {
+      border-color: var(--accent);
+      color: var(--accent-h);
+    }
+
+    .soon-note {
+      text-align: center;
+      font-size: 0.75rem;
+      color: var(--dim);
+      margin-top: 0.4rem;
+    }
+
+    /* ===== FAQ ===== */
+    .faq { margin-top: 4rem; }
+
+    .faq h2 {
+      font-size: 1.2rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      margin-bottom: 1.5rem;
+    }
+
+    .faq-list {
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+    }
+
+    .faq-item {
+      padding: 1.25rem 0;
+      border-top: 1px solid var(--border);
+    }
+
+    .faq-item:last-child { border-bottom: 1px solid var(--border); }
+
+    .faq-q {
+      font-size: 0.9rem;
+      font-weight: 600;
+      color: var(--text);
+      margin-bottom: 0.4rem;
+    }
+
+    .faq-a {
+      font-size: 0.875rem;
+      color: var(--muted);
+      line-height: 1.7;
+    }
+
+    .faq-a a { color: var(--accent-h); }
+
+    @media (max-width: 640px) {
+      .pricing-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="container">
+    <nav class="nav">
+      <a href="../" class="logo"><span class="logo-dot"></span>bluecherlab</a>
+      <ul class="nav-links">
+        <li><a href="index.html">Outlays</a></li>
+        <li><a href="https://github.com/mblue-code/lidl-receipts-cli" target="_blank" rel="noopener noreferrer">GitHub</a></li>
+      </ul>
+      <div class="nav-right">
+        <div class="lang-switch" role="group" aria-label="Language / Sprache">
+          <button id="btn-de" onclick="setLang('de')" aria-label="Deutsch" class="active">DE</button>
+          <button id="btn-en" onclick="setLang('en')" aria-label="English">EN</button>
+        </div>
+      </div>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <div class="container">
+
+    <!-- Intro -->
+    <div class="get-intro">
+      <h1>
+        <span class="de">Outlays herunterladen</span>
+        <span class="en">Get Outlays</span>
+      </h1>
+      <p>
+        <span class="de">Der Code ist offen – immer. Wer nicht selbst kompilieren möchte, kann die fertige App kaufen und damit die Entwicklung unterstützen.</span>
+        <span class="en">The code is open – always. If you'd rather not compile yourself, buy the pre-built app and support development.</span>
+      </p>
+      <div class="oss-statement">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+        <span class="de">MIT-lizenziert · Quellcode auf GitHub · Keine Vendor Lock-in</span>
+        <span class="en">MIT licensed · Source on GitHub · No vendor lock-in</span>
+      </div>
+    </div>
+
+    <!-- Pricing -->
+    <div class="pricing-grid">
+
+      <!-- Free / Self-host -->
+      <div class="pricing-card">
+        <p class="pricing-tier">
+          <span class="de">Selbst hosten</span>
+          <span class="en">Self-host</span>
+        </p>
+        <div class="pricing-price">
+          <span class="amount">€0</span>
+          <span class="period">
+            <span class="de">· für immer</span>
+            <span class="en">· forever</span>
+          </span>
+        </div>
+        <p class="pricing-desc">
+          <span class="de">Vollständiger Quellcode auf GitHub. Selbst kompilieren, Docker nutzen, anpassen – alles erlaubt.</span>
+          <span class="en">Full source code on GitHub. Compile yourself, use Docker, modify – everything allowed.</span>
+        </p>
+
+        <ul class="pricing-features">
+          <li>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+            <span class="de">Vollständiger Quellcode (MIT)</span><span class="en">Full source code (MIT)</span>
+          </li>
+          <li>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+            <span class="de">Docker Compose Setup</span><span class="en">Docker Compose setup</span>
+          </li>
+          <li>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+            <span class="de">Web UI + API inklusive</span><span class="en">Web UI + API included</span>
+          </li>
+          <li>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+            <span class="de">Selbst kompilierbare Electron-App</span><span class="en">Self-compilable Electron app</span>
+          </li>
+          <li>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+            <span class="de">Community Support via GitHub</span><span class="en">Community support via GitHub</span>
+          </li>
+        </ul>
+
+        <div class="pricing-actions">
+          <a href="https://github.com/mblue-code/lidl-receipts-cli" target="_blank" rel="noopener noreferrer" class="btn-secondary">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"/></svg>
+            <span class="de">Auf GitHub ansehen</span><span class="en">View on GitHub</span>
+          </a>
+        </div>
+      </div>
+
+      <!-- Paid / Pre-built -->
+      <div class="pricing-card featured">
+        <p class="pricing-tier">
+          <span class="de">Fertige App · Entwicklung unterstützen</span>
+          <span class="en">Pre-built · Support development</span>
+        </p>
+        <div class="pricing-price">
+          <span class="amount">
+            <span class="de">~€X</span>
+            <span class="en">~€X</span>
+          </span>
+          <span class="period">
+            <span class="de">· einmalig</span>
+            <span class="en">· one-time</span>
+          </span>
+        </div>
+        <p class="pricing-desc">
+          <span class="de">Signierte, fertig kompilierte App – einfach installieren und loslegen. Kaufst du nicht ein Produkt, sondern unterstützt eine Person beim Bauen.</span>
+          <span class="en">Signed, pre-compiled app – install and go. You're not buying a product, you're supporting one person building something useful.</span>
+        </p>
+
+        <ul class="pricing-features">
+          <li>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+            <span class="de">Alles aus der Self-Host-Version</span><span class="en">Everything in the self-host version</span>
+          </li>
+          <li>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+            <span class="de">Signiertes .dmg für macOS</span><span class="en">Signed .dmg for macOS</span>
+          </li>
+          <li>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+            <span class="de">Signierter Installer für Windows</span><span class="en">Signed installer for Windows</span>
+          </li>
+          <li>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+            <span class="de">Kein Compilieren, kein Setup</span><span class="en">No compiling, no setup</span>
+          </li>
+          <li>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+            <span class="de">Updates für die Hauptversion</span><span class="en">Updates for the major version</span>
+          </li>
+        </ul>
+
+        <div class="pricing-actions">
+          <a href="#" class="btn-primary soon" aria-disabled="true">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/></svg>
+            <span class="de">macOS – bald verfügbar</span><span class="en">macOS – coming soon</span>
+          </a>
+          <a href="#" class="btn-primary soon" aria-disabled="true">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M0 3.449L9.75 2.1v9.451H0m10.949-9.602L24 0v11.4H10.949M0 12.6h9.75v9.451L0 20.699M10.949 12.6H24V24l-12.9-1.801"/></svg>
+            <span class="de">Windows – bald verfügbar</span><span class="en">Windows – coming soon</span>
+          </a>
+          <p class="soon-note">
+            <span class="de">Noch in Entwicklung · Kein Newsletter-Pflicht</span>
+            <span class="en">Still in development · No newsletter required</span>
+          </p>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- FAQ -->
+    <div class="faq">
+      <h2>
+        <span class="de">Häufige Fragen</span>
+        <span class="en">Common questions</span>
+      </h2>
+      <div class="faq-list">
+
+        <div class="faq-item">
+          <p class="faq-q">
+            <span class="de">Kann ich die App kaufen und trotzdem den Code anschauen?</span>
+            <span class="en">Can I buy the app and still look at the source code?</span>
+          </p>
+          <p class="faq-a">
+            <span class="de">Ja, immer. Der Code ist auf <a href="https://github.com/mblue-code/lidl-receipts-cli" target="_blank" rel="noopener noreferrer">GitHub</a> offen – egal ob du die App kaufst oder selbst kompilierst. MIT-Lizenz bedeutet: du kannst damit machen, was du willst.</span>
+            <span class="en">Yes, always. The code is open on <a href="https://github.com/mblue-code/lidl-receipts-cli" target="_blank" rel="noopener noreferrer">GitHub</a> regardless of whether you buy or compile yourself. MIT license means you can do whatever you want with it.</span>
+          </p>
+        </div>
+
+        <div class="faq-item">
+          <p class="faq-q">
+            <span class="de">Was bekomme ich für den Kauf, das ich nicht kostenlos bekommen kann?</span>
+            <span class="en">What do I get for buying that I can't get for free?</span>
+          </p>
+          <p class="faq-a">
+            <span class="de">Eine signierte, fertig kompilierte App ohne Sicherheitswarnungen von macOS oder Windows. Du sparst dir den Build-Prozess und unterstützt direkt die Weiterentwicklung.</span>
+            <span class="en">A signed, pre-compiled app with no security warnings from macOS or Windows. You skip the build process and directly support continued development.</span>
+          </p>
+        </div>
+
+        <div class="faq-item">
+          <p class="faq-q">
+            <span class="de">Gibt es ein Abo?</span>
+            <span class="en">Is there a subscription?</span>
+          </p>
+          <p class="faq-a">
+            <span class="de">Nein. Einmaliger Kauf, keine wiederkehrenden Kosten. Updates innerhalb der Hauptversion sind inklusive.</span>
+            <span class="en">No. One-time purchase, no recurring costs. Updates within the major version are included.</span>
+          </p>
+        </div>
+
+        <div class="faq-item">
+          <p class="faq-q">
+            <span class="de">Wie werden meine Daten gespeichert?</span>
+            <span class="en">Where is my data stored?</span>
+          </p>
+          <p class="faq-a">
+            <span class="de">Lokal auf deinem Gerät – nirgendwo sonst. Outlays hat keinen Cloud-Server, keine Telemetrie, keine Verbindung nach Hause. Deine Kassenbons bleiben bei dir.</span>
+            <span class="en">Locally on your device – nowhere else. Outlays has no cloud server, no telemetry, no phone home. Your receipts stay with you.</span>
+          </p>
+        </div>
+
+      </div>
+    </div>
+
+  </div>
+</main>
+
+<footer style="margin-top: 4rem;">
+  <div class="container">
+    <div class="footer-inner">
+      <p class="footer-copy">© 2026 Maximilian Blücher · bluecherlab</p>
+      <ul class="footer-links">
+        <li><a href="../privacy.html"><span class="de">Datenschutz</span><span class="en">Privacy</span></a></li>
+        <li><a href="../imprint.html"><span class="de">Impressum</span><span class="en">Imprint</span></a></li>
+      </ul>
+    </div>
+  </div>
+</footer>
+
+<script>
+  const LS_KEY = 'wff-lang';
+  function setLang(lang) {
+    document.documentElement.classList.remove('lang-de', 'lang-en');
+    document.documentElement.classList.add('lang-' + lang);
+    document.documentElement.lang = lang;
+    document.getElementById('btn-de').classList.toggle('active', lang === 'de');
+    document.getElementById('btn-en').classList.toggle('active', lang === 'en');
+    try { localStorage.setItem(LS_KEY, lang); } catch(e) {}
+  }
+  (function() {
+    let lang;
+    try { lang = localStorage.getItem(LS_KEY); } catch(e) {}
+    if (!lang) lang = (navigator.language || 'de').startsWith('de') ? 'de' : 'en';
+    setLang(lang);
+  })();
+</script>
+
+</body>
+</html>

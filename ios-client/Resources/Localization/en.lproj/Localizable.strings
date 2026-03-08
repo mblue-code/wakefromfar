@@ -1,5 +1,5 @@
 "app_title" = "WakeFromFar";
-"login_subtitle" = "Wake the machines your administrator assigned to you.";
+"login_subtitle" = "Wake the machines available to your account.";
 "login_policy_title" = "Sign in with administrator-provided details";
 "login_policy_message" = "Your administrator gives you the backend URL, username, and password directly.";
 "login_network_message" = "Use the app only over protected private networking such as Tailscale or a trusted VPN.";
@@ -17,7 +17,7 @@
 "login_error_required_fields" = "Backend URL, username, and password are required.";
 "login_error_invalid_url" = "Enter a valid backend URL including http:// or https://.";
 "first_run_title" = "Before you sign in";
-"first_run_body" = "WakeFromFar works only after your administrator sets up the backend and assigns devices to your account.";
+"first_run_body" = "WakeFromFar works only after your administrator sets up the backend and grants your account access to devices.";
 "first_run_rule_admin_setup" = "Your administrator must set up the backend server before you can use this app.";
 "first_run_rule_credentials" = "You need the backend URL, username, and password directly from your administrator.";
 "first_run_rule_private_network" = "Use the app only over protected private networking approved by your administrator, such as Tailscale or a trusted VPN.";
@@ -32,10 +32,20 @@
 "devices_loading" = "Loading devices…";
 "devices_refresh" = "Refresh";
 "devices_retry" = "Try Again";
-"devices_empty_title" = "No assigned devices";
-"devices_empty_message" = "No devices are currently assigned to this account. Ask your administrator if you expected to see machines here.";
+"devices_empty_title" = "No devices available";
+"devices_empty_message" = "No devices are currently available to this account. Ask your administrator to grant device access if you expected to see machines here.";
 "devices_error_title" = "Couldn’t load your devices";
 "devices_error_generic" = "Check your connection to the configured backend and try again.";
+"devices_preferences_error_generic" = "Device preferences could not be updated.";
+"devices_favorite" = "Favorite";
+"devices_unfavorite" = "Unfavorite";
+"devices_favorites_section" = "Favorites";
+"devices_other_section" = "Other";
+"devices_schedule_next_format" = "Next scheduled wake: %@";
+"devices_schedule_active_one" = "1 wake schedule active";
+"devices_schedule_active_many_format" = "%d wake schedules active";
+"devices_schedule_disabled_one" = "1 wake schedule configured, currently disabled";
+"devices_schedule_disabled_many_format" = "%d wake schedules configured, currently disabled";
 "devices_wake" = "Wake";
 "devices_shutdown" = "Request Shutdown";
 "devices_stale_badge" = "Stale";
@@ -49,6 +59,8 @@
 "devices_state_on" = "On";
 "devices_state_off" = "Off";
 "devices_state_unknown" = "Unknown";
+"devices_state_unavailable" = "Unavailable";
+"devices_status_unavailable" = "Status not available for this device.";
 "devices_shutdown_sheet_title" = "Request Shutdown";
 "devices_shutdown_sheet_message" = "Send an optional note with this shutdown request. Admins review requests in Activity.";
 "devices_shutdown_note_label" = "Optional note";
@@ -60,6 +72,7 @@
 "devices_shutdown_accessibility_hint" = "Opens a sheet to add an optional note before sending the request.";
 "devices_shutdown_result_success" = "Shutdown request sent.";
 "devices_shutdown_error_generic" = "The shutdown request could not be sent.";
+"devices_shutdown_not_permitted" = "Shutdown request not available for this device.";
 "devices_wake_result_already_on" = "Device is already on.";
 "devices_wake_result_sent" = "Wake signal sent. The device may take up to 2 minutes to show as on.";
 "devices_wake_result_sent_target_format" = "Wake signal sent to %@. The device may take up to 2 minutes to show as on.";
@@ -68,6 +81,7 @@
 "devices_wake_accessibility_format" = "Wake %@";
 "devices_wake_accessibility_hint" = "Sends a wake signal through the configured backend.";
 "devices_wake_error_generic" = "The wake request could not be completed.";
+"devices_wake_not_permitted" = "Wake not available for this device.";
 
 "activity_title" = "Admin Activity";
 "activity_loading" = "Loading activity…";
@@ -127,7 +141,7 @@
 "settings_backend_url_label" = "Backend URL";
 "settings_username_label" = "Username";
 "settings_billing_section" = "App Store Distribution";
-"settings_billing_summary" = "WakeFromFar for iPhone is sold as a paid App Store app. After you sign in, all devices assigned to your account are available in the app.";
+"settings_billing_summary" = "WakeFromFar for iPhone is sold as a paid App Store app. After you sign in, devices available to your account appear in the app.";
 "settings_billing_source_builds" = "Source-built or self-hosted use outside the App Store follows your own deployment setup and is not managed here.";
 "settings_billing_footer" = "Normal iPhone use does not include an in-app Pro unlock or a device cap.";
 "settings_legal_section" = "Legal and Privacy";
@@ -159,7 +173,7 @@
 "legal_privacy_item_keychain" = "The signed-in session token is stored in the iOS Keychain and stays on this device.";
 "legal_privacy_item_defaults" = "The backend URL, username hint, language, appearance, and notification identifiers are stored locally on this iPhone.";
 "legal_privacy_item_notifications" = "If admin notifications are enabled, the app stores a local installation identifier and the current APNs token, then registers them with the selected backend so it can send generic admin alerts.";
-"legal_privacy_item_billing" = "Apple handles payment for App Store distribution. Normal iPhone app use does not perform in-app purchase, Pro unlock, or entitlement-sync steps before showing assigned devices.";
+"legal_privacy_item_billing" = "Apple handles payment for App Store distribution. Normal iPhone app use does not perform in-app purchase, Pro unlock, or entitlement-sync steps before showing devices available to your account.";
 "legal_privacy_item_network" = "Use the app only over protected private networking approved by your administrator.";
 "legal_compliance_title" = "Apple Compliance Guardrails";
 "legal_compliance_item_no_invites" = "Invite claim and deep-link onboarding are intentionally not implemented on iPhone.";

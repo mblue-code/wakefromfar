@@ -1,5 +1,5 @@
 "app_title" = "WakeFromFar";
-"login_subtitle" = "Wecke die Rechner auf, die dir dein Administrator zugewiesen hat.";
+"login_subtitle" = "Wecke die Rechner auf, die für dein Konto verfügbar sind.";
 "login_policy_title" = "Mit Daten vom Administrator anmelden";
 "login_policy_message" = "Dein Administrator gibt dir Backend-URL, Benutzernamen und Passwort direkt.";
 "login_network_message" = "Nutze die App nur über geschützte private Netzwerke wie Tailscale oder ein vertrauenswürdiges VPN.";
@@ -17,7 +17,7 @@
 "login_error_required_fields" = "Backend-URL, Benutzername und Passwort sind Pflichtfelder.";
 "login_error_invalid_url" = "Gib eine gültige Backend-URL inklusive http:// oder https:// ein.";
 "first_run_title" = "Bevor du dich anmeldest";
-"first_run_body" = "WakeFromFar funktioniert nur, wenn dein Administrator das Backend eingerichtet und Geräte deinem Konto zugewiesen hat.";
+"first_run_body" = "WakeFromFar funktioniert nur, wenn dein Administrator das Backend eingerichtet und deinem Konto Gerätezugriff gegeben hat.";
 "first_run_rule_admin_setup" = "Dein Administrator muss den Backend-Server eingerichtet haben, bevor du diese App nutzen kannst.";
 "first_run_rule_credentials" = "Du brauchst Backend-URL, Benutzername und Passwort direkt von deinem Administrator.";
 "first_run_rule_private_network" = "Nutze die App nur über geschützte private Netzwerke, die dein Administrator freigegeben hat, zum Beispiel Tailscale oder ein vertrauenswürdiges VPN.";
@@ -32,10 +32,20 @@
 "devices_loading" = "Geräte werden geladen…";
 "devices_refresh" = "Aktualisieren";
 "devices_retry" = "Erneut versuchen";
-"devices_empty_title" = "Keine zugewiesenen Geräte";
-"devices_empty_message" = "Diesem Konto sind aktuell keine Geräte zugewiesen. Frage deinen Administrator, falls du hier Rechner erwartest.";
+"devices_empty_title" = "Keine verfügbaren Geräte";
+"devices_empty_message" = "Für dieses Konto sind aktuell keine Geräte verfügbar. Bitte deinen Administrator um Gerätezugriff, falls du hier Rechner erwartest.";
 "devices_error_title" = "Deine Geräte konnten nicht geladen werden";
 "devices_error_generic" = "Prüfe die Verbindung zum eingestellten Backend und versuche es erneut.";
+"devices_preferences_error_generic" = "Geräteeinstellungen konnten nicht aktualisiert werden.";
+"devices_favorite" = "Favorisieren";
+"devices_unfavorite" = "Favorit entfernen";
+"devices_favorites_section" = "Favoriten";
+"devices_other_section" = "Weitere";
+"devices_schedule_next_format" = "Nächster geplanter Wake: %@";
+"devices_schedule_active_one" = "1 Wake-Zeitplan aktiv";
+"devices_schedule_active_many_format" = "%d Wake-Zeitpläne aktiv";
+"devices_schedule_disabled_one" = "1 Wake-Zeitplan vorhanden, derzeit deaktiviert";
+"devices_schedule_disabled_many_format" = "%d Wake-Zeitpläne vorhanden, derzeit deaktiviert";
 "devices_wake" = "Aufwecken";
 "devices_shutdown" = "Shutdown anfragen";
 "devices_stale_badge" = "Veraltet";
@@ -49,6 +59,8 @@
 "devices_state_on" = "An";
 "devices_state_off" = "Aus";
 "devices_state_unknown" = "Unbekannt";
+"devices_state_unavailable" = "Nicht verfügbar";
+"devices_status_unavailable" = "Status für dieses Gerät nicht verfügbar.";
 "devices_shutdown_sheet_title" = "Shutdown anfragen";
 "devices_shutdown_sheet_message" = "Sende optional eine Notiz mit dieser Shutdown-Anfrage. Admins prüfen Anfragen in der Aktivität.";
 "devices_shutdown_note_label" = "Optionale Notiz";
@@ -60,6 +72,7 @@
 "devices_shutdown_accessibility_hint" = "Öffnet ein Formular, um vor dem Senden optional eine Notiz hinzuzufügen.";
 "devices_shutdown_result_success" = "Shutdown-Anfrage gesendet.";
 "devices_shutdown_error_generic" = "Die Shutdown-Anfrage konnte nicht gesendet werden.";
+"devices_shutdown_not_permitted" = "Shutdown-Anfrage für dieses Gerät nicht verfügbar.";
 "devices_wake_result_already_on" = "Gerät ist bereits eingeschaltet.";
 "devices_wake_result_sent" = "Wake-Signal gesendet. Es kann bis zu 2 Minuten dauern, bis das Gerät als eingeschaltet angezeigt wird.";
 "devices_wake_result_sent_target_format" = "Wake-Signal an %@ gesendet. Es kann bis zu 2 Minuten dauern, bis das Gerät als eingeschaltet angezeigt wird.";
@@ -68,6 +81,7 @@
 "devices_wake_accessibility_format" = "%@ aufwecken";
 "devices_wake_accessibility_hint" = "Sendet über das konfigurierte Backend ein Wake-Signal.";
 "devices_wake_error_generic" = "Die Wake-Anfrage konnte nicht abgeschlossen werden.";
+"devices_wake_not_permitted" = "Wake für dieses Gerät nicht verfügbar.";
 
 "activity_title" = "Admin-Aktivität";
 "activity_loading" = "Aktivität wird geladen…";
@@ -127,7 +141,7 @@
 "settings_backend_url_label" = "Backend-URL";
 "settings_username_label" = "Benutzername";
 "settings_billing_section" = "App-Store-Vertrieb";
-"settings_billing_summary" = "WakeFromFar fuer das iPhone wird als kostenpflichtige App im App Store vertrieben. Nach der Anmeldung sind alle deinem Konto zugewiesenen Geraete in der App verfuegbar.";
+"settings_billing_summary" = "WakeFromFar fuer das iPhone wird als kostenpflichtige App im App Store vertrieben. Nach der Anmeldung erscheinen die für dein Konto verfügbaren Geräte in der App.";
 "settings_billing_source_builds" = "Selbst gebaute oder selbst gehostete Nutzung ausserhalb des App Store folgt deiner eigenen Deployment-Konfiguration und wird hier nicht verwaltet.";
 "settings_billing_footer" = "Die normale iPhone-Nutzung enthaelt keinen In-App-Pro-Unlock und keine Geraetebegrenzung.";
 "settings_legal_section" = "Rechtliches und Datenschutz";
@@ -159,7 +173,7 @@
 "legal_privacy_item_keychain" = "Das Sitzungstoken der Anmeldung wird in der iOS-Keychain gespeichert und bleibt auf diesem Gerät.";
 "legal_privacy_item_defaults" = "Backend-URL, Benutzername-Hinweis, Sprache, Darstellung und Benachrichtigungskennungen werden lokal auf diesem iPhone gespeichert.";
 "legal_privacy_item_notifications" = "Wenn Admin-Benachrichtigungen aktiviert sind, speichert die App eine lokale Installationskennung und das aktuelle APNs-Token und registriert beides beim ausgewählten Backend, damit es generische Admin-Hinweise senden kann.";
-"legal_privacy_item_billing" = "Apple verarbeitet die Zahlung fuer die Verteilung ueber den App Store. Die normale iPhone-App-Nutzung fuehrt keine In-App-Kauf-, Pro-Unlock- oder Entitlement-Synchronisierungsschritte aus, bevor zugewiesene Geraete angezeigt werden.";
+"legal_privacy_item_billing" = "Apple verarbeitet die Zahlung fuer die Verteilung ueber den App Store. Die normale iPhone-App-Nutzung fuehrt keine In-App-Kauf-, Pro-Unlock- oder Entitlement-Synchronisierungsschritte aus, bevor für dein Konto verfügbare Geräte angezeigt werden.";
 "legal_privacy_item_network" = "Nutze die App nur über geschützte private Netzwerke, die dein Administrator freigegeben hat.";
 "legal_compliance_title" = "Apple-Compliance-Leitplanken";
 "legal_compliance_item_no_invites" = "Invite-Claim und Deep-Link-Onboarding sind auf dem iPhone absichtlich nicht implementiert.";

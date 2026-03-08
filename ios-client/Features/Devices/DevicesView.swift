@@ -43,17 +43,27 @@ struct DevicesView: View {
                     }
                     .listRowBackground(Color.clear)
                 } else {
-                    ForEach(viewModel.devices) { device in
-                        DeviceRow(
-                            device: device,
-                            isWorking: viewModel.activeDeviceID == device.id
-                        ) {
-                            Task {
-                                await viewModel.wake(device: device)
+                    ForEach(viewModel.deviceSections) { section in
+                        Section {
+                            ForEach(section.devices) { device in
+                                DeviceRow(
+                                    device: device,
+                                    isWorking: viewModel.activeDeviceID == device.id
+                                ) {
+                                    Task {
+                                        await viewModel.toggleFavorite(device: device)
+                                    }
+                                } onWake: {
+                                    Task {
+                                        await viewModel.wake(device: device)
+                                    }
+                                } onShutdown: {
+                                    shutdownTarget = device
+                                    shutdownNote = ""
+                                }
                             }
-                        } onShutdown: {
-                            shutdownTarget = device
-                            shutdownNote = ""
+                        } header: {
+                            Text(section.title)
                         }
                     }
                 }
@@ -142,6 +152,7 @@ struct DevicesView: View {
 private struct DeviceRow: View {
     let device: MyDevice
     let isWorking: Bool
+    let onToggleFavorite: () -> Void
     let onWake: () -> Void
     let onShutdown: () -> Void
 
@@ -153,11 +164,14 @@ private struct DeviceRow: View {
 
                     Spacer(minLength: 8)
 
+                    favoriteButton
+
                     stateBadge
                 }
 
                 VStack(alignment: .leading, spacing: 10) {
                     titleBlock
+                    favoriteButton
                     stateBadge
                 }
             }
@@ -169,7 +183,7 @@ private struct DeviceRow: View {
                         .foregroundStyle(.secondary)
                 }
 
-                if device.isStale {
+                if device.canViewStatus && device.isStale {
                     Label("devices_stale_badge", systemImage: "clock.badge.exclamationmark")
                         .font(.footnote.weight(.semibold))
                         .foregroundStyle(.orange)
@@ -182,6 +196,13 @@ private struct DeviceRow: View {
                 .font(.footnote.monospaced())
                 .foregroundStyle(.secondary)
                 .accessibilityLabel(Text(String(format: NSLocalizedString("devices_mac_accessibility_format", comment: ""), device.mac)))
+
+            if let scheduleHint = device.scheduledWakeHint {
+                Text(scheduleHint)
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.tint)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
             Text(lastCheckedText)
                 .font(.footnote)
@@ -200,6 +221,8 @@ private struct DeviceRow: View {
                     shutdownButton
                 }
             }
+
+            DevicePermissionHints(device: device)
         }
         .padding(.vertical, 6)
         .accessibilityElement(children: .contain)
@@ -228,12 +251,12 @@ private struct DeviceRow: View {
     }
 
     private var stateBadge: some View {
-        Label(stateLabel(for: device.lastPowerState), systemImage: stateSymbol(for: device.lastPowerState))
+        Label(stateLabel, systemImage: stateSymbol)
             .font(.caption.weight(.semibold))
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
-            .background(stateTint(for: device.lastPowerState).opacity(0.15), in: Capsule())
-            .foregroundStyle(stateTint(for: device.lastPowerState))
+            .background(stateTint.opacity(0.15), in: Capsule())
+            .foregroundStyle(stateTint)
             .accessibilityLabel(Text(stateAccessibilityLabel))
     }
 
@@ -248,21 +271,47 @@ private struct DeviceRow: View {
             }
         }
         .buttonStyle(.borderedProminent)
-        .disabled(isWorking)
+        .disabled(isWorking || !device.canWake)
         .accessibilityLabel(Text(String(format: NSLocalizedString("devices_wake_accessibility_format", comment: ""), device.displayTitle)))
-        .accessibilityHint(Text("devices_wake_accessibility_hint"))
+        .accessibilityHint(
+            Text(
+                device.canWake
+                    ? LocalizedStringKey("devices_wake_accessibility_hint")
+                    : LocalizedStringKey("devices_wake_not_permitted")
+            )
+        )
     }
 
     private var shutdownButton: some View {
         Button("devices_shutdown", action: onShutdown)
             .frame(maxWidth: .infinity)
             .buttonStyle(.bordered)
-            .disabled(isWorking)
+            .disabled(isWorking || !device.canRequestShutdown)
             .accessibilityLabel(Text(String(format: NSLocalizedString("devices_shutdown_accessibility_format", comment: ""), device.displayTitle)))
-            .accessibilityHint(Text("devices_shutdown_accessibility_hint"))
+            .accessibilityHint(
+                Text(
+                    device.canRequestShutdown
+                        ? LocalizedStringKey("devices_shutdown_accessibility_hint")
+                        : LocalizedStringKey("devices_shutdown_not_permitted")
+                )
+            )
+    }
+
+    private var favoriteButton: some View {
+        Button(action: onToggleFavorite) {
+            Image(systemName: device.isFavorite ? "star.fill" : "star")
+                .foregroundStyle(device.isFavorite ? .yellow : .secondary)
+                .imageScale(.medium)
+        }
+        .buttonStyle(.plain)
+        .disabled(isWorking)
+        .accessibilityLabel(Text(device.isFavorite ? "devices_unfavorite" : "devices_favorite"))
     }
 
     private var lastCheckedText: String {
+        if !device.canViewStatus {
+            return NSLocalizedString("devices_status_unavailable", comment: "")
+        }
         let base: String
         if let lastCheckedAt = device.lastPowerCheckedAt {
             base = lastCheckedAt.formatted(date: .abbreviated, time: .shortened)
@@ -275,6 +324,27 @@ private struct DeviceRow: View {
             base,
             suffix
         )
+    }
+
+    private var stateLabel: String {
+        guard device.canViewStatus else {
+            return NSLocalizedString("devices_state_unavailable", comment: "")
+        }
+        return stateLabel(for: device.lastPowerState)
+    }
+
+    private var stateTint: Color {
+        guard device.canViewStatus else {
+            return .secondary
+        }
+        return stateTint(for: device.lastPowerState)
+    }
+
+    private var stateSymbol: String {
+        guard device.canViewStatus else {
+            return "lock.slash.fill"
+        }
+        return stateSymbol(for: device.lastPowerState)
     }
 
     private func stateLabel(for state: PowerState) -> String {
@@ -313,7 +383,28 @@ private struct DeviceRow: View {
     private var stateAccessibilityLabel: String {
         String(
             format: NSLocalizedString("devices_state_accessibility_format", comment: ""),
-            stateLabel(for: device.lastPowerState)
+            stateLabel
         )
+    }
+}
+
+private struct DevicePermissionHints: View {
+    let device: MyDevice
+
+    var body: some View {
+        let hints = [
+            device.canViewStatus ? nil : NSLocalizedString("devices_status_unavailable", comment: ""),
+            device.canWake ? nil : NSLocalizedString("devices_wake_not_permitted", comment: ""),
+            device.canRequestShutdown ? nil : NSLocalizedString("devices_shutdown_not_permitted", comment: "")
+        ].compactMap { $0 }
+
+        if hints.isEmpty {
+            EmptyView()
+        } else {
+            Text(hints.joined(separator: " • "))
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 }

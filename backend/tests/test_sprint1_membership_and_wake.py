@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from app.power import PowerCheckResult
 
-from .conftest import auth_headers, login
+from .conftest import auth_headers, create_device_membership, login
 
 
 def _setup_user_and_device(client):
@@ -39,25 +39,20 @@ def _setup_user_and_device(client):
     return admin_h, user_id, device_id, user_token
 
 
-def test_unassigned_user_cannot_wake_device(client):
+def test_non_member_user_cannot_wake_device(client):
     _, _, device_id, user_token = _setup_user_and_device(client)
     user_h = auth_headers(user_token)
 
     wake_res = client.post(f"/me/devices/{device_id}/wake", headers=user_h)
     assert wake_res.status_code == 404
-    assert wake_res.json()["detail"] == "Host not found"
+    assert wake_res.json()["detail"] == "Device not found"
 
 
 def test_wake_returns_already_on_and_does_not_send_magic_packet(client, monkeypatch):
     admin_h, user_id, device_id, user_token = _setup_user_and_device(client)
     user_h = auth_headers(user_token)
 
-    assign_res = client.post(
-        "/admin/assignments",
-        headers=admin_h,
-        json={"user_id": user_id, "device_id": device_id},
-    )
-    assert assign_res.status_code == 201, assign_res.text
+    create_device_membership(client, admin_h, user_id=user_id, device_id=device_id)
 
     def fake_power_check(method: str, target: str | None, port: int | None, timeout_seconds: float = 1.5):
         assert method == "tcp"
@@ -83,12 +78,7 @@ def test_wake_returns_sent_when_precheck_off_and_send_succeeds(client, monkeypat
     admin_h, user_id, device_id, user_token = _setup_user_and_device(client)
     user_h = auth_headers(user_token)
 
-    assign_res = client.post(
-        "/admin/assignments",
-        headers=admin_h,
-        json={"user_id": user_id, "device_id": device_id},
-    )
-    assert assign_res.status_code == 201, assign_res.text
+    create_device_membership(client, admin_h, user_id=user_id, device_id=device_id)
 
     monkeypatch.setattr(
         "app.main.run_power_check",
@@ -127,12 +117,7 @@ def test_wake_returns_failed_when_send_raises(client, monkeypatch):
     admin_h, user_id, device_id, user_token = _setup_user_and_device(client)
     user_h = auth_headers(user_token)
 
-    assign_res = client.post(
-        "/admin/assignments",
-        headers=admin_h,
-        json={"user_id": user_id, "device_id": device_id},
-    )
-    assert assign_res.status_code == 201, assign_res.text
+    create_device_membership(client, admin_h, user_id=user_id, device_id=device_id)
 
     monkeypatch.setattr(
         "app.main.run_power_check",

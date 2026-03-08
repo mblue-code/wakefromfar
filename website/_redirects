@@ -1,0 +1,8 @@
+# Cloudflare Pages – redirect rules
+
+# Clean URLs (no .html extension)
+/privacy            /privacy.html             200
+/imprint            /imprint.html             200
+/impressum          /imprint.html             301
+/wakefromfar/privacy   /privacy.html          301
+/wakefromfar/imprint   /imprint.html          301

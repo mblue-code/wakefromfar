@@ -1,4 +1,14 @@
-# WakeFromFar Detailed Implementation Plan
+# WakeFromFar Detailed Implementation Plan (Historical / Superseded)
+
+This document is retained as historical context only.
+
+Use `/Users/max/projekte/wakefromfar/refactorplan.md` for current refactor work.
+
+The following assumptions in this older plan are now superseded:
+
+- preserving DB history through additive migrations
+- keeping `/hosts` and other compatibility endpoints during a migration window
+- planning around a production-compatible rollout instead of a disposable pre-production rebuild
 
 ## 1. Objective
 
@@ -58,7 +68,7 @@ Deliver a production-ready v1 where:
 
 ## 5. Data Model Changes
 
-Implement DB migration versioning (simple numeric migration table).
+Historical note: this migration-based schema plan is superseded by the clean-slate refactor plan. Upcoming work should implement the target schema directly and reset local DBs instead of extending migration history for old local states.
 
 ### 5.1 New Tables
 
@@ -133,8 +143,10 @@ Implement DB migration versioning (simple numeric migration table).
 
 ### 6.3 Backward Compatibility
 
-- Keep existing `/hosts` + `/hosts/{id}/wake` for migration period.
-- Mark as deprecated once Android switches to `/me/devices`.
+Superseded by the clean-slate refactor plan:
+
+- do not preserve `/hosts` or `/hosts/{id}/wake` for a migration period
+- remove compatibility endpoints when the refactor branch cuts over
 
 ## 7. Device Power-State Design (v1)
 
@@ -226,6 +238,8 @@ Admin chooses method per device. Default to `tcp` because it avoids raw-socket p
 
 ## 11. Sprint Plan (3 Sprints, 2 Weeks Each)
 
+Historical note: this sprint plan predates the clean-slate reset strategy and should not be used for current sprint execution.
+
 Sprint cadence:
 
 - Sprint length: 2 weeks
@@ -254,7 +268,7 @@ Backlog items:
 
 Definition of done:
 
-- Migration runs cleanly on fresh and existing DB.
+- Historical only: this older plan expected migrations on fresh and existing DBs; the active clean-slate plan prefers DB rebuilds.
 - Wake endpoint returns one of: `already_on`, `sent`, `failed`.
 - Authorization tests prove users cannot wake unassigned devices.
 - Unit + integration tests for power-check and wake pre-check pass in CI.

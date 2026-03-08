@@ -1,6 +1,13 @@
 # WakeFromFar Clean-Slate Refactor Plan
 
-Status: proposed clean-slate implementation plan for a disposable pre-production system.
+Status: implemented through Sprint 7 on 2026-03-08; retained as the canonical refactor record and future-work boundary.
+
+Current end-state summary:
+
+- legacy `/hosts` and `/admin/hosts` endpoints are removed
+- memberships are the only supported device-access model
+- admin scheduled wake CRUD ships in API and admin UI
+- Android and iPhone consume the same `/me/devices` contract with read-only `scheduled_wake_summary`
 
 This document replaces the older incremental mindset. It assumes:
 
@@ -263,6 +270,8 @@ Recommended approach for this repo:
 2. Remove obsolete migration complexity that only existed to preserve older local states.
 3. Rebuild the test DB from scratch.
 4. Seed representative users and devices manually or through CLI/test fixtures.
+5. For Docker-based local work, treat `docker-compose.yml` plus `docker-compose.testing.yml` as the canonical disposable stack and reset it with `docker compose -f docker-compose.yml -f docker-compose.testing.yml down -v`.
+6. Do not preserve old migrations or compatibility branches solely to upgrade existing local SQLite files.
 
 This is preferable to adding more migration layers into `backend/app/db.py`.
 
@@ -986,6 +995,10 @@ Exit criteria:
 - docs match actual behavior
 - codebase uses one coherent access model
 
+Status:
+
+- completed on 2026-03-08
+
 ## 11. Testing Strategy
 
 ### 11.1 Backend
@@ -1005,7 +1018,7 @@ Add or update tests for:
 Existing test areas likely to extend:
 
 - `backend/tests/test_api_smoke.py`
-- `backend/tests/test_sprint1_assignment_and_wake.py`
+- `backend/tests/test_sprint1_membership_and_wake.py`
 - `backend/tests/test_shutdown_pokes_api.py`
 - `backend/tests/test_admin_ui.py`
 

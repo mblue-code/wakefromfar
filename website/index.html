@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="de" class="lang-de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>bluecherlab – Apps & Projekte von Maximilian Blücher</title>
+  <meta name="description" content="Apps und Projekte von Maximilian Blücher. WakeFromFar, SleepTrack Audio, CarScreen.">
+  <meta name="robots" content="index, follow">
+  <link rel="canonical" href="https://bluecherlab.com">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://bluecherlab.com">
+  <meta property="og:title" content="bluecherlab – Maximilian Blücher">
+  <meta property="og:description" content="Apps und Projekte von Maximilian Blücher aus Wasbüttel.">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header>
+  <div class="container">
+    <nav class="nav">
+      <a href="." class="logo">
+        <span class="logo-dot"></span>
+        bluecherlab
+      </a>
+      <ul class="nav-links">
+        <li><a href="#apps"><span class="de">Projekte</span><span class="en">Projects</span></a></li>
+        <li><a href="#about"><span class="de">Über mich</span><span class="en">About</span></a></li>
+        <li><a href="imprint.html"><span class="de">Impressum</span><span class="en">Imprint</span></a></li>
+      </ul>
+      <div class="nav-right">
+        <div class="lang-switch" role="group" aria-label="Language / Sprache">
+          <button id="btn-de" onclick="setLang('de')" aria-label="Deutsch" class="active">DE</button>
+          <button id="btn-en" onclick="setLang('en')" aria-label="English">EN</button>
+        </div>
+      </div>
+    </nav>
+  </div>
+</header>
+
+<!-- ===== HERO ===== -->
+<section class="hero section">
+  <div class="container">
+    <p class="hero-eyebrow">bluecherlab</p>
+    <h1>
+      <span class="de">Kleine Apps.<br><em>Echter Nutzen.</em></span>
+      <span class="en">Small apps.<br><em>Real utility.</em></span>
+    </h1>
+    <p class="hero-sub">
+      <span class="de">Ich baue Apps, die ich selbst vermisst habe – für den Heimserver-Alltag, für ruhigere Nächte, und weil Bauen einfach Spaß macht.</span>
+      <span class="en">I build apps I wished existed – for homelab life, for quieter nights, and for the joy of making things.</span>
+    </p>
+  </div>
+</section>
+
+<hr class="divider">
+
+<!-- ===== PROJECTS ===== -->
+<section class="section" id="apps">
+  <div class="container">
+    <div class="section-header">
+      <h2>
+        <span class="de">Apps &amp; Projekte</span>
+        <span class="en">Apps &amp; Projects</span>
+      </h2>
+    </div>
+
+    <div class="projects-grid">
+
+      <!-- WakeFromFar -->
+      <a href="wakefromfar/" class="project-card">
+        <h3>WakeFromFar</h3>
+        <p class="project-card-platform">iOS · Android</p>
+        <p>
+          <span class="de">Manche Jellyfin- oder Immich-Server laufen nicht 24/7. WakeFromFar lässt Freunde und Familie den Server trotzdem selbst starten – ein Tap in der App, der Rechner fährt hoch. Alles im eigenen Netzwerk, keine Cloud.</span>
+          <span class="en">Not everyone runs their Jellyfin or Immich server 24/7. WakeFromFar lets friends and family start it themselves – one tap in the app, the machine powers on. Everything on your own network, no cloud.</span>
+        </p>
+        <div class="project-card-footer">
+          <span>
+            <span class="de">iOS · Einmaliger Kauf · Android · Kostenlos + Pro</span>
+            <span class="en">iOS · paid upfront · Android · free + Pro</span>
+          </span>
+          <span class="project-card-link">
+            <span class="de">Mehr</span><span class="en">More</span>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+          </span>
+        </div>
+      </a>
+
+      <!-- SleepTrack Audio -->
+      <a href="https://sleeptrackaudio.com" target="_blank" rel="noopener noreferrer" class="project-card">
+        <h3>SleepTrack Audio</h3>
+        <p class="project-card-platform">Android</p>
+        <p>
+          <span class="de">Beim Einschlafen verliert man seinen Platz im Hörbuch. SleepTrack Audio merkt sich über Google Health Connect, wann du weggedämmert bist, und schlägt morgens den richtigen Moment vor. Alles lokal auf dem Gerät.</span>
+          <span class="en">Fall asleep to an audiobook and you lose your place. SleepTrack Audio uses Google Health Connect to figure out when you dozed off and suggests where to resume. Everything runs locally on device.</span>
+        </p>
+        <div class="project-card-footer">
+          <span>Android · Google Play</span>
+          <span class="project-card-link">
+            sleeptrackaudio.com
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6M15 3h6v6M10 14L21 3"/></svg>
+          </span>
+        </div>
+      </a>
+
+      <!-- Outlays -->
+      <a href="outlays/" class="project-card">
+        <h3>Outlays <span class="hobby-badge"><span class="de">In Entwicklung</span><span class="en">In Dev</span></span></h3>
+        <p class="project-card-platform">
+          <span class="de">macOS · Windows · Self-hosted</span>
+          <span class="en">macOS · Windows · Self-hosted</span>
+        </p>
+        <p>
+          <span class="de">Kassenbons von Lidl, REWE, Amazon und mehr in einer selbst gehosteten Datenbank. Mit Rabatt-Auswertung, Analytics-Dashboard und einer API, über die auch KI-Agenten direkt abfragen können.</span>
+          <span class="en">Receipts from Lidl, REWE, Amazon, and more in a self-hosted database. Discount analysis, analytics dashboard, and an API AI agents can query directly.</span>
+        </p>
+        <div class="project-card-footer">
+          <span>Open Source · Electron · Docker</span>
+          <span class="project-card-link">
+            <span class="de">Mehr</span><span class="en">More</span>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+          </span>
+        </div>
+      </a>
+
+      <!-- CarScreen -->
+      <a href="carscreen/" class="project-card">
+        <h3>CarScreen <span class="hobby-badge"><span class="de">Hobby</span><span class="en">Hobby</span></span></h3>
+        <p class="project-card-platform">ESP32-P4 · Open Source</p>
+        <p>
+          <span class="de">Need for Speed Underground 2 trifft Elektroauto. Dashboard-Firmware für ein rundes ESP32-P4 Touchdisplay, das Live-Fahrzeugdaten per OVMS empfängt. Vier Themes, weil Basteln auch Spaß machen darf.</span>
+          <span class="en">Need for Speed Underground 2 meets electric car. Dashboard firmware for a round ESP32-P4 touchscreen showing live vehicle data via OVMS. Four themes – because building things should also be fun.</span>
+        </p>
+        <div class="project-card-footer">
+          <span>ESP32-P4 · LVGL · MIT</span>
+          <span class="project-card-link">
+            <span class="de">Mehr</span><span class="en">More</span>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+          </span>
+        </div>
+      </a>
+
+    </div>
+  </div>
+</section>
+
+<hr class="divider">
+
+<!-- ===== ABOUT ===== -->
+<section class="section" id="about">
+  <div class="container">
+    <div class="about-grid">
+      <div class="about-text">
+        <h2>
+          <span class="de">Hallo, ich bin Max.</span>
+          <span class="en">Hi, I'm Max.</span>
+        </h2>
+        <p>
+          <span class="de">Ich entwickle Apps nebenbei – weil mich etwas nervt und ich's einfach bauen will. Kein Team, kein Büro. Ein Rechner, ein Heimserver und zu viel Kaffee.</span>
+          <span class="en">I build apps on the side – because something bugs me and I just want to fix it. No team, no office. One computer, a home server, and too much coffee.</span>
+        </p>
+        <p>
+          <span class="de">Feedback, Fehler gefunden, oder einfach Hallo sagen – ich freue mich über eine Mail.</span>
+          <span class="en">Feedback, found a bug, or just want to say hi – happy to hear from you.</span>
+        </p>
+      </div>
+      <div class="about-meta">
+        <div class="meta-item">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"/><circle cx="12" cy="10" r="3"/></svg>
+          Wasbüttel, Deutschland
+        </div>
+        <div class="meta-item">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+          <a href="mailto:max@bluecherlab.com">max@bluecherlab.com</a>
+        </div>
+        <div class="meta-item">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"/></svg>
+          <a href="https://sleeptrackaudio.com" target="_blank" rel="noopener noreferrer">sleeptrackaudio.com</a>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== FOOTER ===== -->
+<footer>
+  <div class="container">
+    <div class="footer-inner">
+      <p class="footer-copy">© 2026 Maximilian Blücher · bluecherlab</p>
+      <ul class="footer-links">
+        <li><a href="privacy.html"><span class="de">Datenschutz</span><span class="en">Privacy</span></a></li>
+        <li><a href="imprint.html"><span class="de">Impressum</span><span class="en">Imprint</span></a></li>
+      </ul>
+    </div>
+  </div>
+</footer>
+
+<script>
+  const LS_KEY = 'wff-lang';
+  function setLang(lang) {
+    document.documentElement.classList.remove('lang-de', 'lang-en');
+    document.documentElement.classList.add('lang-' + lang);
+    document.documentElement.lang = lang;
+    document.getElementById('btn-de').classList.toggle('active', lang === 'de');
+    document.getElementById('btn-en').classList.toggle('active', lang === 'en');
+    try { localStorage.setItem(LS_KEY, lang); } catch(e) {}
+  }
+  (function() {
+    let lang;
+    try { lang = localStorage.getItem(LS_KEY); } catch(e) {}
+    if (!lang) lang = (navigator.language || 'de').startsWith('de') ? 'de' : 'en';
+    setLang(lang);
+  })();
+</script>
+
+</body>
+</html>

@@ -21,15 +21,57 @@ enum PowerState: String, Codable {
     case unknown
 }
 
+struct DevicePermissions: Codable, Hashable {
+    let canViewStatus: Bool
+    let canWake: Bool
+    let canRequestShutdown: Bool
+    let canManageSchedule: Bool
+
+    init(
+        canViewStatus: Bool = true,
+        canWake: Bool = true,
+        canRequestShutdown: Bool = true,
+        canManageSchedule: Bool = false
+    ) {
+        self.canViewStatus = canViewStatus
+        self.canWake = canWake
+        self.canRequestShutdown = canRequestShutdown
+        self.canManageSchedule = canManageSchedule
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case canViewStatus = "can_view_status"
+        case canWake = "can_wake"
+        case canRequestShutdown = "can_request_shutdown"
+        case canManageSchedule = "can_manage_schedule"
+    }
+}
+
+struct ScheduledWakeSummary: Codable, Hashable {
+    let totalCount: Int
+    let enabledCount: Int
+    let nextRunAt: Date?
+
+    enum CodingKeys: String, CodingKey {
+        case totalCount = "total_count"
+        case enabledCount = "enabled_count"
+        case nextRunAt = "next_run_at"
+    }
+}
+
 struct MyDevice: Decodable, Identifiable {
     let id: String
     let name: String
     let displayName: String?
     let groupName: String?
     let mac: String
+    let isFavorite: Bool
+    let sortOrder: Int
+    let permissions: DevicePermissions
     let lastPowerState: PowerState
     let lastPowerCheckedAt: Date?
     let isStale: Bool
+    let scheduledWakeSummary: ScheduledWakeSummary?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -37,9 +79,29 @@ struct MyDevice: Decodable, Identifiable {
         case displayName = "display_name"
         case groupName = "group_name"
         case mac
+        case isFavorite = "is_favorite"
+        case sortOrder = "sort_order"
+        case permissions
         case lastPowerState = "last_power_state"
         case lastPowerCheckedAt = "last_power_checked_at"
         case isStale = "is_stale"
+        case scheduledWakeSummary = "scheduled_wake_summary"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        displayName = try container.decodeIfPresent(String.self, forKey: .displayName)
+        groupName = try container.decodeIfPresent(String.self, forKey: .groupName)
+        mac = try container.decode(String.self, forKey: .mac)
+        isFavorite = try container.decodeIfPresent(Bool.self, forKey: .isFavorite) ?? false
+        sortOrder = try container.decodeIfPresent(Int.self, forKey: .sortOrder) ?? 0
+        permissions = try container.decodeIfPresent(DevicePermissions.self, forKey: .permissions) ?? DevicePermissions()
+        lastPowerState = try container.decodeIfPresent(PowerState.self, forKey: .lastPowerState) ?? .unknown
+        lastPowerCheckedAt = try container.decodeIfPresent(Date.self, forKey: .lastPowerCheckedAt)
+        isStale = try container.decodeIfPresent(Bool.self, forKey: .isStale) ?? true
+        scheduledWakeSummary = try container.decodeIfPresent(ScheduledWakeSummary.self, forKey: .scheduledWakeSummary)
     }
 
     var displayTitle: String {
@@ -48,6 +110,164 @@ struct MyDevice: Decodable, Identifiable {
         }
         return name
     }
+
+    var canViewStatus: Bool {
+        permissions.canViewStatus
+    }
+
+    var canWake: Bool {
+        permissions.canWake
+    }
+
+    var canRequestShutdown: Bool {
+        permissions.canRequestShutdown
+    }
+
+    var canManageSchedule: Bool {
+        permissions.canManageSchedule
+    }
+
+    var scheduledWakeHint: String? {
+        guard let summary = scheduledWakeSummary else {
+            return nil
+        }
+        if let nextRunAt = summary.nextRunAt, summary.enabledCount > 0 {
+            let formatter = DateFormatter()
+            formatter.locale = .current
+            formatter.dateStyle = .short
+            formatter.timeStyle = .short
+            return String(
+                format: NSLocalizedString("devices_schedule_next_format", comment: ""),
+                formatter.string(from: nextRunAt)
+            )
+        }
+        if summary.enabledCount > 0 {
+            if summary.enabledCount == 1 {
+                return NSLocalizedString("devices_schedule_active_one", comment: "")
+            }
+            return String(
+                format: NSLocalizedString("devices_schedule_active_many_format", comment: ""),
+                summary.enabledCount
+            )
+        }
+        if summary.totalCount > 0 {
+            if summary.totalCount == 1 {
+                return NSLocalizedString("devices_schedule_disabled_one", comment: "")
+            }
+            return String(
+                format: NSLocalizedString("devices_schedule_disabled_many_format", comment: ""),
+                summary.totalCount
+            )
+        }
+        return nil
+    }
+}
+
+struct DevicePreferencesUpdateRequest: Encodable {
+    let isFavorite: Bool?
+    let sortOrder: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case isFavorite = "is_favorite"
+        case sortOrder = "sort_order"
+    }
+}
+
+struct DeviceListSection: Identifiable {
+    let id: String
+    let title: String
+    let devices: [MyDevice]
+    let isFavorites: Bool
+}
+
+func sortDevicesForPresentation(_ devices: [MyDevice]) -> [MyDevice] {
+    devices.sorted {
+        let lhsFavorite = $0.isFavorite ? 0 : 1
+        let rhsFavorite = $1.isFavorite ? 0 : 1
+        if lhsFavorite != rhsFavorite { return lhsFavorite < rhsFavorite }
+
+        let lhsUngrouped = !$0.isFavorite && isUngrouped($0.groupName)
+        let rhsUngrouped = !$1.isFavorite && isUngrouped($1.groupName)
+        if lhsUngrouped != rhsUngrouped { return rhsUngrouped }
+
+        let lhsGroup = $0.isFavorite || lhsUngrouped ? "" : normalizedGroupName($0.groupName)
+        let rhsGroup = $1.isFavorite || rhsUngrouped ? "" : normalizedGroupName($1.groupName)
+        let groupComparison = lhsGroup.localizedCaseInsensitiveCompare(rhsGroup)
+        if groupComparison != .orderedSame { return groupComparison == .orderedAscending }
+
+        if $0.sortOrder != $1.sortOrder { return $0.sortOrder < $1.sortOrder }
+
+        let titleComparison = $0.displayTitle.localizedCaseInsensitiveCompare($1.displayTitle)
+        if titleComparison != .orderedSame { return titleComparison == .orderedAscending }
+
+        let nameComparison = $0.name.localizedCaseInsensitiveCompare($1.name)
+        if nameComparison != .orderedSame { return nameComparison == .orderedAscending }
+
+        return $0.id < $1.id
+    }
+}
+
+func buildDeviceSections(
+    _ devices: [MyDevice],
+    favoritesTitle: String,
+    fallbackGroupTitle: String
+) -> [DeviceListSection] {
+    guard !devices.isEmpty else {
+        return []
+    }
+
+    let sortedDevices = sortDevicesForPresentation(devices)
+    let favorites = sortedDevices.filter(\.isFavorite)
+    let groupedDevices = sortedDevices.filter { !$0.isFavorite }
+    var sections: [DeviceListSection] = []
+
+    if !favorites.isEmpty {
+        sections.append(
+            DeviceListSection(
+                id: "favorites",
+                title: favoritesTitle,
+                devices: favorites,
+                isFavorites: true
+            )
+        )
+    }
+
+    let grouped = Dictionary(grouping: groupedDevices) { device in
+        let group = device.groupName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return group.isEmpty ? fallbackGroupTitle : group
+    }
+    var seenTitles = Set<String>()
+    let orderedTitles = groupedDevices.compactMap { device -> String? in
+        let group = device.groupName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let title = group.isEmpty ? fallbackGroupTitle : group
+        guard seenTitles.insert(title).inserted else {
+            return nil
+        }
+        return title
+    }
+
+    for title in orderedTitles {
+        guard let groupDevices = grouped[title] else { continue }
+        sections.append(
+            DeviceListSection(
+                id: "group:\(title)",
+                title: title,
+                devices: groupDevices,
+                isFavorites: false
+            )
+        )
+    }
+
+    return sections
+}
+
+private func normalizedGroupName(_ value: String?) -> String {
+    let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return trimmed
+}
+
+private func isUngrouped(_ value: String?) -> Bool {
+    normalizedGroupName(value).isEmpty
 }
 
 enum WakeResult: String, Codable {

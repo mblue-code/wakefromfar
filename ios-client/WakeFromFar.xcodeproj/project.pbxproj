@@ -34,7 +34,19 @@
 		A00000000000000000000017 /* KeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000048 /* KeychainStore.swift */; };
 		A00000000000000000000018 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000051 /* Assets.xcassets */; };
 		A00000000000000000000019 /* Localizable.strings in Resources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000052 /* Localizable.strings */; };
+		A0000000000000000000009C /* DeviceContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000009A /* DeviceContractTests.swift */; };
+		A0000000000000000000009E /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000042 /* Models.swift */; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		A00000000000000000000094 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A00000000000000000000074 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A00000000000000000000071;
+			remoteInfo = WakeFromFar;
+		};
+/* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
 		A0000000000000000000001A /* WakeFromFar.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = WakeFromFar.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -67,10 +79,19 @@
 		A0000000000000000000004A /* de */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = de; path = Localization/de.lproj/Localizable.strings; sourceTree = "<group>"; };
 		A00000000000000000000051 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A00000000000000000000053 /* WakeFromFar.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = WakeFromFar.entitlements; sourceTree = "<group>"; };
+		A0000000000000000000009A /* DeviceContractTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceContractTests.swift; sourceTree = "<group>"; };
+		A0000000000000000000009B /* WakeFromFarTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = WakeFromFarTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		A00000000000000000000061 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A00000000000000000000091 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -88,6 +109,7 @@
 				A00000000000000000000065 /* Services */,
 				A00000000000000000000066 /* Persistence */,
 				A00000000000000000000067 /* Resources */,
+				A00000000000000000000099 /* Tests */,
 				A00000000000000000000068 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -153,6 +175,7 @@
 			isa = PBXGroup;
 			children = (
 				A0000000000000000000001A /* WakeFromFar.app */,
+				A0000000000000000000009B /* WakeFromFarTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -227,6 +250,22 @@
 			path = Billing;
 			sourceTree = "<group>";
 		};
+		A00000000000000000000099 /* Tests */ = {
+			isa = PBXGroup;
+			children = (
+				A0000000000000000000009D /* WakeFromFarTests */,
+			);
+			path = Tests;
+			sourceTree = "<group>";
+		};
+		A0000000000000000000009D /* WakeFromFarTests */ = {
+			isa = PBXGroup;
+			children = (
+				A0000000000000000000009A /* DeviceContractTests.swift */,
+			);
+			path = WakeFromFarTests;
+			sourceTree = "<group>";
+		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -247,6 +286,23 @@
 			productReference = A0000000000000000000001A /* WakeFromFar.app */;
 			productType = "com.apple.product-type.application";
 		};
+		A00000000000000000000093 /* WakeFromFarTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A00000000000000000000098 /* Build configuration list for PBXNativeTarget "WakeFromFarTests" */;
+			buildPhases = (
+				A00000000000000000000092 /* Sources */,
+				A00000000000000000000091 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				A00000000000000000000095 /* PBXTargetDependency */,
+			);
+			name = WakeFromFarTests;
+			productName = WakeFromFarTests;
+			productReference = A0000000000000000000009B /* WakeFromFarTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -259,6 +315,10 @@
 				TargetAttributes = {
 					A00000000000000000000071 = {
 						CreatedOnToolsVersion = 16.0;
+					};
+					A00000000000000000000093 = {
+						CreatedOnToolsVersion = 16.0;
+						TestTargetID = A00000000000000000000071;
 					};
 				};
 			};
@@ -277,6 +337,7 @@
 			projectRoot = "";
 			targets = (
 				A00000000000000000000071 /* WakeFromFar */,
+				A00000000000000000000093 /* WakeFromFarTests */,
 			);
 		};
 /* End PBXProject section */
@@ -326,7 +387,24 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		A00000000000000000000092 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A0000000000000000000009E /* Models.swift in Sources */,
+				A0000000000000000000009C /* DeviceContractTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		A00000000000000000000095 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A00000000000000000000071 /* WakeFromFar */;
+			targetProxy = A00000000000000000000094 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin PBXVariantGroup section */
 		A00000000000000000000052 /* Localizable.strings */ = {
@@ -442,6 +520,51 @@
 			};
 			name = Release;
 		};
+		A00000000000000000000096 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@loader_path/Frameworks",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.wakefromfar.iosclientTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_TARGET_NAME = WakeFromFar;
+			};
+			name = Debug;
+		};
+		A00000000000000000000097 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@loader_path/Frameworks",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.wakefromfar.iosclientTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_TARGET_NAME = WakeFromFar;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -459,6 +582,15 @@
 			buildConfigurations = (
 				A00000000000000000000083 /* Debug */,
 				A00000000000000000000084 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A00000000000000000000098 /* Build configuration list for PBXNativeTarget "WakeFromFarTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A00000000000000000000096 /* Debug */,
+				A00000000000000000000097 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

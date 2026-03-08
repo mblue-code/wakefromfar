@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="de" class="lang-de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CarScreen – EV Dashboard im NFSU2-Stil</title>
+  <meta name="description" content="Selbstgebautes EV-Dashboard auf ESP32-P4 mit LVGL. NFSU2-inspirierte Themes, OVMS-Integration, Touchscreen. Open Source, MIT Lizenz.">
+  <meta name="robots" content="index, follow">
+  <link rel="canonical" href="https://bluecherlab.com/carscreen/">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://bluecherlab.com/carscreen/">
+  <meta property="og:title" content="CarScreen – EV Dashboard">
+  <meta property="og:description" content="Need for Speed Underground 2 trifft Elektroauto. ESP32-P4 Dashboard mit OVMS.">
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body>
+
+<header>
+  <div class="container">
+    <nav class="nav">
+      <a href="../" class="logo">
+        <span class="logo-dot"></span>
+        bluecherlab
+      </a>
+      <ul class="nav-links">
+        <li><a href="../#apps"><span class="de">Alle Projekte</span><span class="en">All Projects</span></a></li>
+        <li><a href="https://github.com/mblue-code/carscreen" target="_blank" rel="noopener noreferrer">GitHub</a></li>
+        <li><a href="../privacy.html"><span class="de">Datenschutz</span><span class="en">Privacy</span></a></li>
+      </ul>
+      <div class="nav-right">
+        <div class="lang-switch" role="group" aria-label="Language / Sprache">
+          <button id="btn-de" onclick="setLang('de')" aria-label="Deutsch" class="active">DE</button>
+          <button id="btn-en" onclick="setLang('en')" aria-label="English">EN</button>
+        </div>
+      </div>
+    </nav>
+  </div>
+</header>
+
+<!-- ===== HERO ===== -->
+<section class="hero-centered">
+  <div class="container">
+    <div class="badge">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"/></svg>
+      <span class="de">Open Source · MIT Lizenz · Persönliches Projekt</span>
+      <span class="en">Open Source · MIT License · Personal Project</span>
+    </div>
+
+    <h1>
+      <span class="de">Dein EV-Dashboard.<br><em>NFSU2-Style.</em></span>
+      <span class="en">Your EV dashboard.<br><em>NFSU2 style.</em></span>
+    </h1>
+
+    <p class="hero-sub-centered">
+      <span class="de">Echtzeit-Fahrzeugdaten vom OVMS-System auf einem runden ESP32-P4 Touchscreen – mit wechselbaren Themes im Need for Speed Underground 2-Stil.</span>
+      <span class="en">Real-time vehicle data from OVMS on a round ESP32-P4 touchscreen – with swappable themes inspired by Need for Speed Underground 2.</span>
+    </p>
+
+    <div class="store-buttons">
+      <a href="https://github.com/mblue-code/carscreen" target="_blank" rel="noopener noreferrer" class="store-btn">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"/>
+        </svg>
+        <div class="store-btn-text">
+          <small>GitHub</small>
+          <strong>mblue-code/carscreen</strong>
+        </div>
+      </a>
+    </div>
+
+    <p class="hero-note">
+      <span class="de">ESP32-P4 · LVGL 9 · OVMS WebSocket · MIT</span>
+      <span class="en">ESP32-P4 · LVGL 9 · OVMS WebSocket · MIT</span>
+    </p>
+  </div>
+</section>
+
+<hr class="divider">
+
+<!-- ===== ABOUT ===== -->
+<section class="section" id="about">
+  <div class="container">
+    <div class="section-header">
+      <h2>
+        <span class="de">Was ist CarScreen?</span>
+        <span class="en">What is CarScreen?</span>
+      </h2>
+      <p>
+        <span class="de">Ein selbstgebautes Sekundärdisplay für Elektrofahrzeuge. Firmware für das Waveshare ESP32-P4 Round Display (800×800), das Fahrzeugdaten live über OVMS empfängt und mit LVGL visualisiert.</span>
+        <span class="en">A DIY secondary display for electric vehicles. Firmware for the Waveshare ESP32-P4 round display (800×800) that receives live vehicle data via OVMS and renders it with LVGL.</span>
+      </p>
+    </div>
+  </div>
+</section>
+
+<hr class="divider">
+
+<!-- ===== FEATURES ===== -->
+<section class="section" id="features">
+  <div class="container">
+    <div class="section-header">
+      <h2>
+        <span class="de">Funktionen</span>
+        <span class="en">Features</span>
+      </h2>
+    </div>
+
+    <div class="features-grid">
+
+      <div class="feature-card">
+        <div class="feature-icon">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+        </div>
+        <h3><span class="de">4 Themes</span><span class="en">4 Themes</span></h3>
+        <p>
+          <span class="de">NFSU2 (Rennsport-Neon), CYBER (blaues Glow), ANALOG (warmes Amber) und OEM. Per Swipe oder Menü wechselbar.</span>
+          <span class="en">NFSU2 (racing neon), CYBER (blue glow), ANALOG (warm amber), and OEM. Switchable via swipe or menu.</span>
+        </p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+        </div>
+        <h3><span class="de">3 Dashboard-Modi</span><span class="en">3 Dashboard Modes</span></h3>
+        <p>
+          <span class="de">Standby (geparkt), Laden und Fahren – automatisch per State Machine umgeschaltet oder manuell überschrieben.</span>
+          <span class="en">Standby (parked), charging, and driving – automatically switched via state machine or manually overridden.</span>
+        </p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a10 10 0 110 20A10 10 0 0112 2z"/><path d="M12 6v6l4 2"/></svg>
+        </div>
+        <h3><span class="de">OVMS-Integration</span><span class="en">OVMS Integration</span></h3>
+        <p>
+          <span class="de">Live-Daten per WebSocket vom lokalen OVMS-Server: Geschwindigkeit, SOC, Temperaturen, Ladeleistung und mehr.</span>
+          <span class="en">Live data via WebSocket from the local OVMS server: speed, SOC, temperatures, charging power, and more.</span>
+        </p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+        </div>
+        <h3><span class="de">Auto-Helligkeit</span><span class="en">Auto Brightness</span></h3>
+        <p>
+          <span class="de">VEML7700-Umgebungslichtsensor mit EMA-Glättung und logarithmischer Kurve. Manuelle Überschreibung im Menü.</span>
+          <span class="en">VEML7700 ambient light sensor with EMA smoothing and log curve. Manual override via menu.</span>
+        </p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+        </div>
+        <h3><span class="de">Touch-Gesten</span><span class="en">Touch Gestures</span></h3>
+        <p>
+          <span class="de">Swipe links/rechts zum Wechseln der Ansicht. Lang-Press (800 ms) öffnet das Quick-Menü. Fahrsperre bei Tempo &gt; 5 km/h.</span>
+          <span class="en">Swipe left/right to cycle views. Long-press (800 ms) opens the quick menu. Menu locked at speed &gt; 5 km/h.</span>
+        </p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+        </div>
+        <h3><span class="de">Persistente Einstellungen</span><span class="en">Persistent Settings</span></h3>
+        <p>
+          <span class="de">Theme, Helligkeitsmodus und -bereich werden im NVS gespeichert und überleben Neustarts.</span>
+          <span class="en">Theme, brightness mode, and range are saved to NVS and survive reboots.</span>
+        </p>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<hr class="divider">
+
+<!-- ===== HARDWARE ===== -->
+<section class="section" id="hardware">
+  <div class="container">
+    <div class="section-header">
+      <h2>
+        <span class="de">Hardware-Voraussetzungen</span>
+        <span class="en">Hardware Requirements</span>
+      </h2>
+      <p>
+        <span class="de">Das Projekt ist auf diese Hardware ausgelegt. Andere Boards erfordern Anpassungen.</span>
+        <span class="en">The project targets this specific hardware. Other boards require adaptation.</span>
+      </p>
+    </div>
+
+    <div class="features-grid" style="margin-top: 2rem;">
+
+      <div class="feature-card">
+        <div class="feature-icon" style="background: rgba(240,180,41,0.12); color: var(--amber);">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><line x1="9" y1="1" x2="9" y2="4"/><line x1="15" y1="1" x2="15" y2="4"/><line x1="9" y1="20" x2="9" y2="23"/><line x1="15" y1="20" x2="15" y2="23"/></svg>
+        </div>
+        <h3>Waveshare ESP32-P4</h3>
+        <p>
+          <span class="de">ESP32-P4NRW32 mit rundem 800×800 IPS-Touchscreen (MIPI-DSI, JD9365). ESP32-C6 Koprozessor für Wi-Fi über SDIO.</span>
+          <span class="en">ESP32-P4NRW32 with round 800×800 IPS touchscreen (MIPI-DSI, JD9365). ESP32-C6 coprocessor for Wi-Fi via SDIO.</span>
+        </p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon" style="background: rgba(240,180,41,0.12); color: var(--amber);">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+        </div>
+        <h3>OVMS</h3>
+        <p>
+          <span class="de">Open Vehicles Management System – lokal im Fahrzeugnetzwerk erreichbar. CarScreen verbindet sich per WebSocket mit dem OVMS Web-UI.</span>
+          <span class="en">Open Vehicles Management System – reachable locally in the vehicle network. CarScreen connects to the OVMS Web UI via WebSocket.</span>
+        </p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon" style="background: rgba(240,180,41,0.12); color: var(--amber);">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/></svg>
+        </div>
+        <h3>VEML7700 <span style="color:var(--dim);font-weight:400;font-size:0.8rem;">(optional)</span></h3>
+        <p>
+          <span class="de">I²C-Umgebungslichtsensor für automatische Helligkeitsregelung. Ohne den Sensor läuft das System im manuellen Modus.</span>
+          <span class="en">I²C ambient light sensor for automatic brightness control. Without it, the system runs in manual brightness mode.</span>
+        </p>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<hr class="divider">
+
+<!-- ===== OSS ===== -->
+<section class="section">
+  <div class="container">
+    <div class="oss-banner">
+      <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="margin: 0 auto 1rem; color: var(--accent-h);" aria-hidden="true">
+        <path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"/>
+      </svg>
+      <h2>
+        <span class="de">Open Source – MIT Lizenz</span>
+        <span class="en">Open Source – MIT License</span>
+      </h2>
+      <p>
+        <span class="de">Firmware, Themes und Dokumentation sind auf GitHub verfügbar. Eigene Themes, Fahrzeugprofile und LVGL-Widgets willkommen.</span>
+        <span class="en">Firmware, themes, and documentation are on GitHub. Custom themes, vehicle profiles, and LVGL widgets are welcome.</span>
+      </p>
+      <a href="https://github.com/mblue-code/carscreen" target="_blank" rel="noopener noreferrer" class="btn btn-outline">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"/>
+        </svg>
+        mblue-code/carscreen
+      </a>
+    </div>
+  </div>
+</section>
+
+<!-- ===== FOOTER ===== -->
+<footer>
+  <div class="container">
+    <div class="footer-inner">
+      <p class="footer-copy">© 2026 Maximilian Blücher · bluecherlab · MIT</p>
+      <ul class="footer-links">
+        <li><a href="../privacy.html"><span class="de">Datenschutz</span><span class="en">Privacy</span></a></li>
+        <li><a href="../imprint.html"><span class="de">Impressum</span><span class="en">Imprint</span></a></li>
+      </ul>
+    </div>
+  </div>
+</footer>
+
+<script>
+  const LS_KEY = 'wff-lang';
+  function setLang(lang) {
+    document.documentElement.classList.remove('lang-de', 'lang-en');
+    document.documentElement.classList.add('lang-' + lang);
+    document.documentElement.lang = lang;
+    document.getElementById('btn-de').classList.toggle('active', lang === 'de');
+    document.getElementById('btn-en').classList.toggle('active', lang === 'en');
+    try { localStorage.setItem(LS_KEY, lang); } catch(e) {}
+  }
+  (function() {
+    let lang;
+    try { lang = localStorage.getItem(LS_KEY); } catch(e) {}
+    if (!lang) lang = (navigator.language || 'de').startsWith('de') ? 'de' : 'en';
+    setLang(lang);
+  })();
+</script>
+
+</body>
+</html>

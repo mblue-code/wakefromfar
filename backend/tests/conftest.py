@@ -42,3 +42,34 @@ def login(client: TestClient, username: str, password: str) -> str:
 
 def auth_headers(token: str) -> dict[str, str]:
     return {"authorization": f"Bearer {token}"}
+
+
+def create_device_membership(
+    client: TestClient,
+    admin_headers: dict[str, str],
+    *,
+    user_id: int,
+    device_id: str,
+    can_view_status: bool = True,
+    can_wake: bool = True,
+    can_request_shutdown: bool = True,
+    can_manage_schedule: bool = False,
+    is_favorite: bool = False,
+    sort_order: int = 0,
+) -> dict:
+    response = client.post(
+        "/admin/device-memberships",
+        headers=admin_headers,
+        json={
+            "user_id": user_id,
+            "device_id": device_id,
+            "can_view_status": can_view_status,
+            "can_wake": can_wake,
+            "can_request_shutdown": can_request_shutdown,
+            "can_manage_schedule": can_manage_schedule,
+            "is_favorite": is_favorite,
+            "sort_order": sort_order,
+        },
+    )
+    assert response.status_code == 201, response.text
+    return response.json()

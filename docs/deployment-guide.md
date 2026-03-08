@@ -9,6 +9,20 @@ This guide covers production-style deployment of the WoL backend in these modes:
 
 It also includes multi-network (multiple NIC) Wake-on-LAN setup.
 
+Current repo stance for the clean-slate refactor:
+
+- local and pre-production backend environments are disposable
+- schema changes should prefer DB rebuilds over preserving historical local SQLite states
+- the canonical local reset flow lives in `/Users/max/projekte/wakefromfar/docs/local-reset-workflow.md`
+- the production-style sections below describe runtime topology, not a requirement to preserve backward-compatible schema/data rollout
+
+Current supported product surface:
+
+- admin device CRUD via `/admin/devices`
+- admin device access management via `/admin/device-memberships`
+- admin scheduled wake CRUD via `/admin/scheduled-wakes` plus `/admin/ui/scheduled-wakes`
+- user/device app contract via `/me/devices`, including favorites, grouped presentation fields, permissions, and `scheduled_wake_summary`
+
 ## 1. Core Networking Model (Important)
 
 When the server has multiple NICs/networks, each target device should use network-specific WoL settings:
@@ -97,34 +111,50 @@ For a dedicated testing environment (separate DB volume), use:
 docker compose -f docker-compose.yml -f docker-compose.testing.yml up -d --build
 ```
 
+For ongoing clean-slate refactor work, treat this testing stack as the default local environment and reset it with `down -v` when schema-changing work lands.
+
 Check:
 
 ```bash
 curl http://127.0.0.1:8080/health
 ```
 
-Add devices (CLI example):
+Add devices (admin API example):
 
 ```bash
-docker compose exec wol-backend python -m app.cli add-host \
-  --name "NAS-A" \
-  --mac "AA:BB:CC:DD:EE:01" \
-  --broadcast "192.168.1.255" \
-  --source-ip "192.168.1.10" \
-  --interface "eth0" \
-  --check-method "tcp" \
-  --check-target "192.168.1.50" \
-  --check-port 80
+TOKEN=$(curl -fsS http://127.0.0.1:8080/auth/login \
+  -H 'content-type: application/json' \
+  -d "{\"username\":\"${ADMIN_USER:-admin}\",\"password\":\"${ADMIN_PASS}\"}" | jq -r '.token')
 
-docker compose exec wol-backend python -m app.cli add-host \
-  --name "PC-B" \
-  --mac "AA:BB:CC:DD:EE:02" \
-  --broadcast "10.0.0.255" \
-  --source-ip "10.0.0.2" \
-  --interface "enx001122334455" \
-  --check-method "tcp" \
-  --check-target "10.0.0.20" \
-  --check-port 22
+curl -fsS http://127.0.0.1:8080/admin/devices \
+  -H "authorization: Bearer $TOKEN" \
+  -H 'content-type: application/json' \
+  -d '{
+    "name":"NAS-A",
+    "display_name":"NAS A",
+    "mac":"AA:BB:CC:DD:EE:01",
+    "broadcast":"192.168.1.255",
+    "source_ip":"192.168.1.10",
+    "interface":"eth0",
+    "check_method":"tcp",
+    "check_target":"192.168.1.50",
+    "check_port":80
+  }'
+
+curl -fsS http://127.0.0.1:8080/admin/devices \
+  -H "authorization: Bearer $TOKEN" \
+  -H 'content-type: application/json' \
+  -d '{
+    "name":"PC-B",
+    "display_name":"PC B",
+    "mac":"AA:BB:CC:DD:EE:02",
+    "broadcast":"10.0.0.255",
+    "source_ip":"10.0.0.2",
+    "interface":"enx001122334455",
+    "check_method":"tcp",
+    "check_target":"10.0.0.20",
+    "check_port":22
+  }'
 ```
 
 Important:
@@ -135,13 +165,15 @@ Important:
 
 ### 4.1 Storage defaults
 
-The default compose files now use named Docker volumes for `/data`:
+The current compose files use named Docker volumes for `/data`:
 
 - `wol-data`
+- `wol-data-simple`
 - `wol-data-testing`
 - `wol-data-prod`
 
 This keeps the default deployment simpler and avoids host-path ownership drift on rebuilds.
+For local refactor work, prefer rebuilding the testing volume instead of carrying old DB state forward.
 
 ## 5. Docker Deployment Behind Reverse Proxy
 
@@ -351,10 +383,11 @@ If WoL fails:
 1. `GET /health`
 2. Admin login
 3. Create one device per network (A and B)
-4. Assign device to test user
-5. Trigger wake for both devices
-6. Check `/admin/wake-logs` and verify `sent_to` network targets
-7. Run power checks and verify non-`unknown` state:
+4. Create a device membership for the test user
+5. Optionally create one scheduled wake in the admin UI or via `/admin/scheduled-wakes`
+6. Trigger wake for both devices
+7. Check `/admin/wake-logs` and verify `sent_to` network targets
+8. Run power checks and verify non-`unknown` state:
    - `POST /me/devices/{id}/power-check`
    - if result is `unknown` with `missing_check_target`/`missing_check_port`, set `check_target` + `check_port` on the device
 

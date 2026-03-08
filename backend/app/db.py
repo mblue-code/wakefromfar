@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 import uuid
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
-import ipaddress
 from typing import Generator, Literal
 
 from .config import get_settings
@@ -27,18 +27,77 @@ def _table_has_column(conn: sqlite3.Connection, table_name: str, column_name: st
     return any(row["name"] == column_name for row in rows)
 
 
-def _add_column_if_missing(
-    conn: sqlite3.Connection,
-    table_name: str,
-    column_name: str,
-    column_def: str,
-) -> None:
-    if _table_has_column(conn, table_name, column_name):
-        return
-    conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_def}")
+def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1",
+        (table_name,),
+    ).fetchone()
+    return row is not None
 
 
-def _migration_001_base_schema(conn: sqlite3.Connection) -> None:
+_APP_TABLES = [
+    "notification_devices",
+    "shutdown_poke_requests",
+    "activity_events",
+    "discovery_events",
+    "discovery_candidates",
+    "discovery_runs",
+    "admin_audit_logs",
+    "power_check_logs",
+    "wake_logs",
+    "scheduled_wake_runs",
+    "scheduled_wake_jobs",
+    "invite_tokens",
+    "device_memberships",
+    "user_device_access",
+    "hosts",
+    "users",
+    "schema_migrations",
+    "ios_entitlements",
+]
+
+
+def _device_membership_columns(conn: sqlite3.Connection) -> set[str]:
+    if not _table_exists(conn, "device_memberships"):
+        return set()
+    rows = conn.execute("PRAGMA table_info(device_memberships)").fetchall()
+    return {str(row["name"]) for row in rows}
+
+
+def _schema_requires_reset(conn: sqlite3.Connection) -> bool:
+    if _table_exists(conn, "schema_migrations"):
+        return True
+    if _table_exists(conn, "user_device_access"):
+        return True
+    if _table_exists(conn, "hosts") and not _table_has_column(conn, "hosts", "updated_at"):
+        return True
+    membership_columns = _device_membership_columns(conn)
+    if membership_columns and membership_columns != {
+        "id",
+        "user_id",
+        "device_id",
+        "can_view_status",
+        "can_wake",
+        "can_request_shutdown",
+        "can_manage_schedule",
+        "is_favorite",
+        "sort_order",
+        "created_at",
+        "updated_at",
+    }:
+        return True
+    return False
+
+
+def _reset_app_schema(conn: sqlite3.Connection) -> None:
+    conn.execute("PRAGMA foreign_keys = OFF")
+    for table_name in _APP_TABLES:
+        conn.execute(f"DROP TABLE IF EXISTS {table_name}")
+    conn.execute("PRAGMA foreign_keys = ON")
+
+
+def _create_schema(conn: sqlite3.Connection) -> None:
+    conn.execute("PRAGMA foreign_keys = ON")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS users (
@@ -56,16 +115,53 @@ def _migration_001_base_schema(conn: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS hosts (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
+            display_name TEXT,
             mac TEXT NOT NULL,
             group_name TEXT,
             broadcast TEXT,
             subnet_cidr TEXT,
             udp_port INTEGER NOT NULL DEFAULT 9,
             interface TEXT,
-            created_at TEXT NOT NULL
+            source_ip TEXT,
+            source_network_cidr TEXT,
+            check_method TEXT NOT NULL CHECK(check_method IN ('tcp', 'icmp')) DEFAULT 'tcp',
+            check_target TEXT,
+            check_port INTEGER,
+            last_power_state TEXT NOT NULL CHECK(last_power_state IN ('on', 'off', 'unknown')) DEFAULT 'unknown',
+            last_power_checked_at TEXT,
+            provisioning_source TEXT NOT NULL DEFAULT 'manual' CHECK(provisioning_source IN ('manual', 'discovery')),
+            discovery_confidence TEXT CHECK(discovery_confidence IN ('high', 'medium', 'low', 'unknown')),
+            last_discovered_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS device_memberships (
+            id TEXT PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            device_id TEXT NOT NULL,
+            can_view_status INTEGER NOT NULL DEFAULT 1 CHECK(can_view_status IN (0, 1)),
+            can_wake INTEGER NOT NULL DEFAULT 1 CHECK(can_wake IN (0, 1)),
+            can_request_shutdown INTEGER NOT NULL DEFAULT 1 CHECK(can_request_shutdown IN (0, 1)),
+            can_manage_schedule INTEGER NOT NULL DEFAULT 0 CHECK(can_manage_schedule IN (0, 1)),
+            is_favorite INTEGER NOT NULL DEFAULT 0 CHECK(is_favorite IN (0, 1)),
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(user_id, device_id),
+            FOREIGN KEY(user_id) REFERENCES users(id),
+            FOREIGN KEY(device_id) REFERENCES hosts(id)
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_device_memberships_user_sort "
+        "ON device_memberships(user_id, is_favorite DESC, sort_order ASC, updated_at DESC, device_id ASC)"
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_device_memberships_device_id ON device_memberships(device_id)")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS wake_logs (
@@ -74,24 +170,60 @@ def _migration_001_base_schema(conn: sqlite3.Connection) -> None:
             actor_username TEXT NOT NULL,
             sent_to TEXT NOT NULL,
             created_at TEXT NOT NULL,
+            result TEXT NOT NULL DEFAULT 'sent',
+            error_detail TEXT,
+            precheck_state TEXT NOT NULL DEFAULT 'unknown',
             FOREIGN KEY(host_id) REFERENCES hosts(id)
         )
         """
     )
-
-
-def _migration_002_sprint1(conn: sqlite3.Connection) -> None:
     conn.execute(
         """
-        CREATE TABLE IF NOT EXISTS user_device_access (
-            user_id INTEGER NOT NULL,
+        CREATE TABLE IF NOT EXISTS scheduled_wake_jobs (
+            id TEXT PRIMARY KEY,
             device_id TEXT NOT NULL,
+            created_by_user_id INTEGER NOT NULL,
+            label TEXT NOT NULL,
+            enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0, 1)),
+            timezone TEXT NOT NULL,
+            days_of_week_json TEXT NOT NULL,
+            local_time TEXT NOT NULL,
+            next_run_at TEXT,
+            last_run_at TEXT,
             created_at TEXT NOT NULL,
-            PRIMARY KEY (user_id, device_id),
-            FOREIGN KEY(user_id) REFERENCES users(id),
-            FOREIGN KEY(device_id) REFERENCES hosts(id)
+            updated_at TEXT NOT NULL
         )
         """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_scheduled_wake_jobs_enabled_next_run "
+        "ON scheduled_wake_jobs(enabled, next_run_at)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_scheduled_wake_jobs_device_enabled "
+        "ON scheduled_wake_jobs(device_id, enabled)"
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS scheduled_wake_runs (
+            id TEXT PRIMARY KEY,
+            job_id TEXT NOT NULL,
+            device_id TEXT NOT NULL,
+            started_at TEXT NOT NULL,
+            finished_at TEXT,
+            result TEXT NOT NULL CHECK(result IN ('sent', 'already_on', 'failed', 'skipped')),
+            detail TEXT,
+            wake_log_id INTEGER
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_scheduled_wake_runs_job_started_at "
+        "ON scheduled_wake_runs(job_id, started_at DESC)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_scheduled_wake_runs_device_started_at "
+        "ON scheduled_wake_runs(device_id, started_at DESC)"
     )
     conn.execute(
         """
@@ -121,20 +253,6 @@ def _migration_002_sprint1(conn: sqlite3.Connection) -> None:
         )
         """
     )
-
-    _add_column_if_missing(conn, "hosts", "display_name", "TEXT")
-    _add_column_if_missing(conn, "hosts", "check_method", "TEXT NOT NULL DEFAULT 'tcp'")
-    _add_column_if_missing(conn, "hosts", "check_target", "TEXT")
-    _add_column_if_missing(conn, "hosts", "check_port", "INTEGER")
-    _add_column_if_missing(conn, "hosts", "last_power_state", "TEXT NOT NULL DEFAULT 'unknown'")
-    _add_column_if_missing(conn, "hosts", "last_power_checked_at", "TEXT")
-
-    _add_column_if_missing(conn, "wake_logs", "result", "TEXT NOT NULL DEFAULT 'sent'")
-    _add_column_if_missing(conn, "wake_logs", "error_detail", "TEXT")
-    _add_column_if_missing(conn, "wake_logs", "precheck_state", "TEXT NOT NULL DEFAULT 'unknown'")
-
-
-def _migration_003_admin_audit(conn: sqlite3.Connection) -> None:
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS admin_audit_logs (
@@ -148,13 +266,6 @@ def _migration_003_admin_audit(conn: sqlite3.Connection) -> None:
         )
         """
     )
-
-
-def _migration_004_source_ip(conn: sqlite3.Connection) -> None:
-    _add_column_if_missing(conn, "hosts", "source_ip", "TEXT")
-
-
-def _migration_005_discovery_schema(conn: sqlite3.Connection) -> None:
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS discovery_runs (
@@ -216,35 +327,6 @@ def _migration_005_discovery_schema(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_discovery_candidates_ip ON discovery_candidates(ip)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_discovery_candidates_imported_host_id ON discovery_candidates(imported_host_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_discovery_events_run_id ON discovery_events(run_id, id DESC)")
-
-    _add_column_if_missing(conn, "hosts", "source_network_cidr", "TEXT")
-    _add_column_if_missing(conn, "hosts", "provisioning_source", "TEXT NOT NULL DEFAULT 'manual'")
-    _add_column_if_missing(conn, "hosts", "discovery_confidence", "TEXT")
-    _add_column_if_missing(conn, "hosts", "last_discovered_at", "TEXT")
-
-    conn.execute("UPDATE hosts SET provisioning_source = 'manual' WHERE provisioning_source IS NULL OR provisioning_source = ''")
-
-    rows = conn.execute("SELECT id, source_ip, subnet_cidr, source_network_cidr FROM hosts").fetchall()
-    for row in rows:
-        if row["source_network_cidr"]:
-            continue
-        source_ip = str(row["source_ip"] or "").strip()
-        subnet_cidr = str(row["subnet_cidr"] or "").strip()
-        if not source_ip or not subnet_cidr:
-            continue
-        try:
-            ip_obj = ipaddress.ip_address(source_ip)
-            net_obj = ipaddress.ip_network(subnet_cidr, strict=False)
-        except ValueError:
-            continue
-        if ip_obj in net_obj:
-            conn.execute(
-                "UPDATE hosts SET source_network_cidr = ? WHERE id = ?",
-                (str(net_obj), row["id"]),
-            )
-
-
-def _migration_006_activity_events(conn: sqlite3.Connection) -> None:
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS activity_events (
@@ -266,9 +348,6 @@ def _migration_006_activity_events(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_activity_events_created_at ON activity_events(created_at DESC)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_activity_events_event_type_created_at ON activity_events(event_type, created_at DESC)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_activity_events_server_id_created_at ON activity_events(server_id, created_at DESC)")
-
-
-def _migration_007_shutdown_poke_requests(conn: sqlite3.Connection) -> None:
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS shutdown_poke_requests (
@@ -289,14 +368,6 @@ def _migration_007_shutdown_poke_requests(conn: sqlite3.Connection) -> None:
         """
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_shutdown_poke_requests_status_created_at ON shutdown_poke_requests(status, created_at DESC)")
-
-
-def _migration_008_user_token_version(conn: sqlite3.Connection) -> None:
-    _add_column_if_missing(conn, "users", "token_version", "INTEGER NOT NULL DEFAULT 0")
-    conn.execute("UPDATE users SET token_version = 0 WHERE token_version IS NULL")
-
-
-def _migration_009_notification_devices(conn: sqlite3.Connection) -> None:
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS notification_devices (
@@ -331,44 +402,11 @@ def _migration_009_notification_devices(conn: sqlite3.Connection) -> None:
     )
 
 
-def _migration_011_remove_ios_entitlements(conn: sqlite3.Connection) -> None:
-    conn.execute("DROP TABLE IF EXISTS ios_entitlements")
-
-
 def init_db() -> None:
     with get_conn() as conn:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS schema_migrations (
-                version INTEGER PRIMARY KEY,
-                applied_at TEXT NOT NULL
-            )
-            """
-        )
-        applied = {
-            row["version"]
-            for row in conn.execute("SELECT version FROM schema_migrations ORDER BY version ASC").fetchall()
-        }
-        migrations = {
-            1: _migration_001_base_schema,
-            2: _migration_002_sprint1,
-            3: _migration_003_admin_audit,
-            4: _migration_004_source_ip,
-            5: _migration_005_discovery_schema,
-            6: _migration_006_activity_events,
-            7: _migration_007_shutdown_poke_requests,
-            8: _migration_008_user_token_version,
-            9: _migration_009_notification_devices,
-            11: _migration_011_remove_ios_entitlements,
-        }
-        for version in sorted(migrations.keys()):
-            if version in applied:
-                continue
-            migrations[version](conn)
-            conn.execute(
-                "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
-                (version, datetime.now(UTC).isoformat()),
-            )
+        if _schema_requires_reset(conn):
+            _reset_app_schema(conn)
+        _create_schema(conn)
 
 
 def get_user_by_id(user_id: int) -> sqlite3.Row | None:
@@ -419,7 +457,7 @@ def update_user_role(user_id: int, role: str) -> bool:
 
 def delete_user(user_id: int) -> bool:
     with get_conn() as conn:
-        conn.execute("DELETE FROM user_device_access WHERE user_id = ?", (user_id,))
+        conn.execute("DELETE FROM device_memberships WHERE user_id = ?", (user_id,))
         cur = conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
         return cur.rowcount > 0
 
@@ -446,43 +484,7 @@ def upsert_admin(username: str, password_hash: str) -> None:
     create_user(username=username, password_hash=password_hash, role="admin")
 
 
-def list_hosts() -> list[sqlite3.Row]:
-    with get_conn() as conn:
-        rows = conn.execute(
-            """
-            SELECT
-                id,
-                name,
-                mac,
-                group_name,
-                broadcast,
-                subnet_cidr,
-                udp_port,
-                interface,
-                source_ip,
-                source_network_cidr,
-                created_at,
-                display_name,
-                check_method,
-                check_target,
-                check_port,
-                last_power_state,
-                last_power_checked_at,
-                provisioning_source,
-                discovery_confidence,
-                last_discovered_at
-            FROM hosts
-            ORDER BY name COLLATE NOCASE ASC
-            """
-        ).fetchall()
-        return list(rows)
-
-
-def list_assigned_hosts(user_id: int) -> list[sqlite3.Row]:
-    with get_conn() as conn:
-        rows = conn.execute(
-            """
-            SELECT
+_DEVICE_SELECT_COLUMNS = """
                 h.id,
                 h.name,
                 h.mac,
@@ -494,6 +496,7 @@ def list_assigned_hosts(user_id: int) -> list[sqlite3.Row]:
                 h.source_ip,
                 h.source_network_cidr,
                 h.created_at,
+                h.updated_at,
                 h.display_name,
                 h.check_method,
                 h.check_target,
@@ -502,15 +505,164 @@ def list_assigned_hosts(user_id: int) -> list[sqlite3.Row]:
                 h.last_power_checked_at,
                 h.provisioning_source,
                 h.discovery_confidence,
-                h.last_discovered_at
+                h.last_discovered_at,
+                sws.total_count AS scheduled_wake_total_count,
+                sws.enabled_count AS scheduled_wake_enabled_count,
+                sws.next_run_at AS scheduled_wake_next_run_at
+"""
+
+_DEVICE_SCHEDULE_SUMMARY_JOIN = """
+            LEFT JOIN (
+                SELECT
+                    device_id,
+                    COUNT(*) AS total_count,
+                    SUM(CASE WHEN enabled = 1 THEN 1 ELSE 0 END) AS enabled_count,
+                    MIN(CASE WHEN enabled = 1 THEN next_run_at END) AS next_run_at
+                FROM scheduled_wake_jobs
+                GROUP BY device_id
+            ) sws ON sws.device_id = h.id
+"""
+
+
+def list_hosts() -> list[sqlite3.Row]:
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+{columns}
             FROM hosts h
-            INNER JOIN user_device_access uda ON uda.device_id = h.id
-            WHERE uda.user_id = ?
-            ORDER BY h.name COLLATE NOCASE ASC
-            """,
+{schedule_join}
+            ORDER BY COALESCE(NULLIF(display_name, ''), name) COLLATE NOCASE ASC, id ASC
+            """.format(columns=_DEVICE_SELECT_COLUMNS, schedule_join=_DEVICE_SCHEDULE_SUMMARY_JOIN)
+        ).fetchall()
+        return list(rows)
+
+
+def list_visible_devices_for_user(user_id: int) -> list[sqlite3.Row]:
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+{columns},
+                dm.id AS membership_id,
+                dm.can_view_status,
+                dm.can_wake,
+                dm.can_request_shutdown,
+                dm.can_manage_schedule,
+                dm.is_favorite,
+                dm.sort_order,
+                dm.created_at AS membership_created_at,
+                dm.updated_at AS membership_updated_at
+            FROM hosts h
+            INNER JOIN device_memberships dm ON dm.device_id = h.id
+{schedule_join}
+            WHERE dm.user_id = ?
+            ORDER BY
+                dm.is_favorite DESC,
+                CASE
+                    WHEN dm.is_favorite = 1 THEN 0
+                    WHEN NULLIF(h.group_name, '') IS NULL THEN 1
+                    ELSE 0
+                END ASC,
+                CASE
+                    WHEN dm.is_favorite = 1 OR NULLIF(h.group_name, '') IS NULL THEN ''
+                    ELSE h.group_name
+                END COLLATE NOCASE ASC,
+                dm.sort_order ASC,
+                COALESCE(NULLIF(h.display_name, ''), h.name) COLLATE NOCASE ASC,
+                h.id ASC
+            """.format(columns=_DEVICE_SELECT_COLUMNS, schedule_join=_DEVICE_SCHEDULE_SUMMARY_JOIN),
             (user_id,),
         ).fetchall()
         return list(rows)
+
+
+def get_visible_device_for_user(user_id: int, device_id: str) -> sqlite3.Row | None:
+    with get_conn() as conn:
+        return conn.execute(
+            """
+            SELECT
+{columns},
+                dm.id AS membership_id,
+                dm.can_view_status,
+                dm.can_wake,
+                dm.can_request_shutdown,
+                dm.can_manage_schedule,
+                dm.is_favorite,
+                dm.sort_order,
+                dm.created_at AS membership_created_at,
+                dm.updated_at AS membership_updated_at
+            FROM hosts h
+            INNER JOIN device_memberships dm ON dm.device_id = h.id
+{schedule_join}
+            WHERE dm.user_id = ? AND h.id = ?
+            """.format(columns=_DEVICE_SELECT_COLUMNS, schedule_join=_DEVICE_SCHEDULE_SUMMARY_JOIN),
+            (user_id, device_id),
+        ).fetchone()
+
+
+def list_all_devices_for_user_preferences(user_id: int) -> list[sqlite3.Row]:
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+{columns},
+                dm.id AS membership_id,
+                dm.can_view_status,
+                dm.can_wake,
+                dm.can_request_shutdown,
+                dm.can_manage_schedule,
+                dm.is_favorite,
+                dm.sort_order,
+                dm.created_at AS membership_created_at,
+                dm.updated_at AS membership_updated_at
+            FROM hosts h
+            LEFT JOIN device_memberships dm
+                ON dm.device_id = h.id AND dm.user_id = ?
+{schedule_join}
+            ORDER BY
+                COALESCE(dm.is_favorite, 0) DESC,
+                CASE
+                    WHEN COALESCE(dm.is_favorite, 0) = 1 THEN 0
+                    WHEN NULLIF(h.group_name, '') IS NULL THEN 1
+                    ELSE 0
+                END ASC,
+                CASE
+                    WHEN COALESCE(dm.is_favorite, 0) = 1 OR NULLIF(h.group_name, '') IS NULL THEN ''
+                    ELSE h.group_name
+                END COLLATE NOCASE ASC,
+                COALESCE(dm.sort_order, 0) ASC,
+                COALESCE(NULLIF(h.display_name, ''), h.name) COLLATE NOCASE ASC,
+                h.id ASC
+            """.format(columns=_DEVICE_SELECT_COLUMNS, schedule_join=_DEVICE_SCHEDULE_SUMMARY_JOIN),
+            (user_id,),
+        ).fetchall()
+        return list(rows)
+
+
+def get_device_for_user_preferences(user_id: int, device_id: str) -> sqlite3.Row | None:
+    with get_conn() as conn:
+        return conn.execute(
+            """
+            SELECT
+{columns},
+                dm.id AS membership_id,
+                dm.can_view_status,
+                dm.can_wake,
+                dm.can_request_shutdown,
+                dm.can_manage_schedule,
+                dm.is_favorite,
+                dm.sort_order,
+                dm.created_at AS membership_created_at,
+                dm.updated_at AS membership_updated_at
+            FROM hosts h
+            LEFT JOIN device_memberships dm
+                ON dm.device_id = h.id AND dm.user_id = ?
+{schedule_join}
+            WHERE h.id = ?
+            """.format(columns=_DEVICE_SELECT_COLUMNS, schedule_join=_DEVICE_SCHEDULE_SUMMARY_JOIN),
+            (user_id, device_id),
+        ).fetchone()
 
 
 def get_host_by_id(host_id: str) -> sqlite3.Row | None:
@@ -526,17 +678,146 @@ def get_host_by_mac(mac: str) -> sqlite3.Row | None:
         ).fetchone()
 
 
-def get_assigned_host_by_id(user_id: int, host_id: str) -> sqlite3.Row | None:
+def create_device_membership(
+    *,
+    user_id: int,
+    device_id: str,
+    can_view_status: bool = True,
+    can_wake: bool = True,
+    can_request_shutdown: bool = True,
+    can_manage_schedule: bool = False,
+    is_favorite: bool = False,
+    sort_order: int = 0,
+) -> sqlite3.Row:
+    membership_id = str(uuid.uuid4())
+    now = datetime.now(UTC).isoformat()
+    with get_conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO device_memberships(
+                id,
+                user_id,
+                device_id,
+                can_view_status,
+                can_wake,
+                can_request_shutdown,
+                can_manage_schedule,
+                is_favorite,
+                sort_order,
+                created_at,
+                updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                membership_id,
+                user_id,
+                device_id,
+                int(can_view_status),
+                int(can_wake),
+                int(can_request_shutdown),
+                int(can_manage_schedule),
+                int(is_favorite),
+                sort_order,
+                now,
+                now,
+            ),
+        )
+        row = conn.execute(
+            """
+            SELECT
+                dm.*,
+                u.username,
+                h.name AS device_name,
+                h.display_name AS device_display_name
+            FROM device_memberships dm
+            INNER JOIN users u ON u.id = dm.user_id
+            INNER JOIN hosts h ON h.id = dm.device_id
+            WHERE dm.id = ?
+            """,
+            (membership_id,),
+        ).fetchone()
+        if row is None:
+            raise RuntimeError("device membership insert failed")
+        return row
+
+
+def update_device_membership(membership_id: str, updates: dict[str, object | None]) -> sqlite3.Row | None:
+    if not updates:
+        return get_device_membership_by_id(membership_id)
+    normalized_updates = dict(updates)
+    normalized_updates["updated_at"] = datetime.now(UTC).isoformat()
+    columns = ", ".join(f"{key} = ?" for key in normalized_updates.keys())
+    values = list(normalized_updates.values())
+    values.append(membership_id)
+    with get_conn() as conn:
+        cur = conn.execute(f"UPDATE device_memberships SET {columns} WHERE id = ?", tuple(values))
+        if cur.rowcount == 0:
+            return None
+    return get_device_membership_by_id(membership_id)
+
+
+def delete_device_membership(membership_id: str) -> bool:
+    with get_conn() as conn:
+        cur = conn.execute("DELETE FROM device_memberships WHERE id = ?", (membership_id,))
+        return cur.rowcount > 0
+
+
+def get_device_membership_by_id(membership_id: str) -> sqlite3.Row | None:
     with get_conn() as conn:
         return conn.execute(
             """
-            SELECT h.*
-            FROM hosts h
-            INNER JOIN user_device_access uda ON uda.device_id = h.id
-            WHERE uda.user_id = ? AND h.id = ?
+            SELECT
+                dm.*,
+                u.username,
+                h.name AS device_name,
+                h.display_name AS device_display_name
+            FROM device_memberships dm
+            INNER JOIN users u ON u.id = dm.user_id
+            INNER JOIN hosts h ON h.id = dm.device_id
+            WHERE dm.id = ?
             """,
-            (user_id, host_id),
+            (membership_id,),
         ).fetchone()
+
+
+def get_device_membership_for_user_device(user_id: int, device_id: str) -> sqlite3.Row | None:
+    with get_conn() as conn:
+        return conn.execute(
+            """
+            SELECT
+                dm.*,
+                u.username,
+                h.name AS device_name,
+                h.display_name AS device_display_name
+            FROM device_memberships dm
+            INNER JOIN users u ON u.id = dm.user_id
+            INNER JOIN hosts h ON h.id = dm.device_id
+            WHERE dm.user_id = ? AND dm.device_id = ?
+            """,
+            (user_id, device_id),
+        ).fetchone()
+
+
+def list_device_memberships() -> list[sqlite3.Row]:
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                dm.*,
+                u.username,
+                h.name AS device_name,
+                h.display_name AS device_display_name
+            FROM device_memberships dm
+            INNER JOIN users u ON u.id = dm.user_id
+            INNER JOIN hosts h ON h.id = dm.device_id
+            ORDER BY
+                u.username COLLATE NOCASE ASC,
+                COALESCE(NULLIF(h.display_name, ''), h.name) COLLATE NOCASE ASC,
+                dm.id ASC
+            """
+        ).fetchall()
+        return list(rows)
 
 
 def create_host(
@@ -575,6 +856,7 @@ def create_host(
                 source_ip,
                 source_network_cidr,
                 created_at,
+                updated_at,
                 display_name,
                 check_method,
                 check_target,
@@ -585,7 +867,7 @@ def create_host(
                 discovery_confidence,
                 last_discovered_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'unknown', NULL, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'unknown', NULL, ?, ?, ?)
             """,
             (
                 generated_id,
@@ -599,6 +881,7 @@ def create_host(
                 source_ip,
                 source_network_cidr,
                 now,
+                now,
                 display_name,
                 check_method,
                 check_target,
@@ -611,12 +894,304 @@ def create_host(
     return generated_id
 
 
+_SCHEDULED_WAKE_JOB_SELECT = """
+    SELECT
+        j.*,
+        h.name AS device_name,
+        h.display_name AS device_display_name,
+        u.username AS created_by_username,
+        (
+            SELECT r.result
+            FROM scheduled_wake_runs r
+            WHERE r.job_id = j.id
+            ORDER BY r.started_at DESC, r.id DESC
+            LIMIT 1
+        ) AS recent_run_result,
+        (
+            SELECT r.detail
+            FROM scheduled_wake_runs r
+            WHERE r.job_id = j.id
+            ORDER BY r.started_at DESC, r.id DESC
+            LIMIT 1
+        ) AS recent_run_detail,
+        (
+            SELECT r.started_at
+            FROM scheduled_wake_runs r
+            WHERE r.job_id = j.id
+            ORDER BY r.started_at DESC, r.id DESC
+            LIMIT 1
+        ) AS recent_run_started_at
+    FROM scheduled_wake_jobs j
+    LEFT JOIN hosts h ON h.id = j.device_id
+    LEFT JOIN users u ON u.id = j.created_by_user_id
+"""
+
+
+def create_scheduled_wake_job(
+    *,
+    device_id: str,
+    created_by_user_id: int,
+    label: str,
+    enabled: bool,
+    timezone: str,
+    days_of_week: list[str],
+    local_time: str,
+    next_run_at: str | None,
+) -> sqlite3.Row:
+    job_id = str(uuid.uuid4())
+    now = datetime.now(UTC).isoformat()
+    with get_conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO scheduled_wake_jobs(
+                id,
+                device_id,
+                created_by_user_id,
+                label,
+                enabled,
+                timezone,
+                days_of_week_json,
+                local_time,
+                next_run_at,
+                last_run_at,
+                created_at,
+                updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
+            """,
+            (
+                job_id,
+                device_id,
+                created_by_user_id,
+                label,
+                int(enabled),
+                timezone,
+                json.dumps(days_of_week, separators=(",", ":")),
+                local_time,
+                next_run_at,
+                now,
+                now,
+            ),
+        )
+        row = conn.execute(f"{_SCHEDULED_WAKE_JOB_SELECT} WHERE j.id = ?", (job_id,)).fetchone()
+        if row is None:
+            raise RuntimeError("scheduled wake job insert failed")
+        return row
+
+
+def get_scheduled_wake_job(job_id: str) -> sqlite3.Row | None:
+    with get_conn() as conn:
+        return conn.execute(f"{_SCHEDULED_WAKE_JOB_SELECT} WHERE j.id = ?", (job_id,)).fetchone()
+
+
+def list_scheduled_wake_jobs(
+    limit: int = 200,
+    *,
+    device_id: str | None = None,
+    enabled: bool | None = None,
+) -> list[sqlite3.Row]:
+    safe_limit = max(1, min(limit, 500))
+    where_clauses: list[str] = []
+    params: list[object] = []
+    if device_id:
+        where_clauses.append("j.device_id = ?")
+        params.append(device_id)
+    if enabled is not None:
+        where_clauses.append("j.enabled = ?")
+        params.append(int(enabled))
+    where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+    with get_conn() as conn:
+        rows = conn.execute(
+            f"""
+            {_SCHEDULED_WAKE_JOB_SELECT}
+            {where_sql}
+            ORDER BY
+                j.enabled DESC,
+                CASE WHEN j.next_run_at IS NULL OR j.next_run_at = '' THEN 1 ELSE 0 END ASC,
+                j.next_run_at ASC,
+                j.label COLLATE NOCASE ASC,
+                j.id ASC
+            LIMIT ?
+            """,
+            (*params, safe_limit),
+        ).fetchall()
+        return list(rows)
+
+
+def update_scheduled_wake_job(job_id: str, updates: dict[str, object | None]) -> sqlite3.Row | None:
+    if not updates:
+        return get_scheduled_wake_job(job_id)
+
+    normalized_updates = dict(updates)
+    if "days_of_week" in normalized_updates:
+        normalized_updates["days_of_week_json"] = json.dumps(
+            normalized_updates.pop("days_of_week"),
+            separators=(",", ":"),
+        )
+    normalized_updates["updated_at"] = datetime.now(UTC).isoformat()
+    columns = ", ".join(f"{key} = ?" for key in normalized_updates.keys())
+    values = list(normalized_updates.values())
+    values.append(job_id)
+    with get_conn() as conn:
+        cur = conn.execute(f"UPDATE scheduled_wake_jobs SET {columns} WHERE id = ?", tuple(values))
+        if cur.rowcount == 0:
+            return None
+    return get_scheduled_wake_job(job_id)
+
+
+def delete_scheduled_wake_job(job_id: str) -> bool:
+    with get_conn() as conn:
+        cur = conn.execute("DELETE FROM scheduled_wake_jobs WHERE id = ?", (job_id,))
+        return cur.rowcount > 0
+
+
+def list_due_scheduled_wake_jobs(now_utc: str, limit: int = 25) -> list[sqlite3.Row]:
+    safe_limit = max(1, min(limit, 500))
+    with get_conn() as conn:
+        rows = conn.execute(
+            f"""
+            {_SCHEDULED_WAKE_JOB_SELECT}
+            WHERE j.enabled = 1
+              AND j.next_run_at IS NOT NULL
+              AND j.next_run_at <= ?
+            ORDER BY j.next_run_at ASC, j.id ASC
+            LIMIT ?
+            """,
+            (now_utc, safe_limit),
+        ).fetchall()
+        return list(rows)
+
+
+def claim_scheduled_wake_job(
+    *,
+    job_id: str,
+    expected_next_run_at: str,
+    claimed_next_run_at: str | None,
+    claimed_at: str,
+) -> sqlite3.Row | None:
+    with get_conn() as conn:
+        cur = conn.execute(
+            """
+            UPDATE scheduled_wake_jobs
+            SET next_run_at = ?, updated_at = ?
+            WHERE id = ?
+              AND enabled = 1
+              AND next_run_at = ?
+            """,
+            (claimed_next_run_at, claimed_at, job_id, expected_next_run_at),
+        )
+        if cur.rowcount == 0:
+            return None
+        return conn.execute(f"{_SCHEDULED_WAKE_JOB_SELECT} WHERE j.id = ?", (job_id,)).fetchone()
+
+
+def mark_scheduled_wake_job_executed(
+    *,
+    job_id: str,
+    last_run_at: str,
+    next_run_at: str | None,
+) -> sqlite3.Row | None:
+    with get_conn() as conn:
+        cur = conn.execute(
+            """
+            UPDATE scheduled_wake_jobs
+            SET last_run_at = ?, next_run_at = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (last_run_at, next_run_at, last_run_at, job_id),
+        )
+        if cur.rowcount == 0:
+            return None
+        return conn.execute(f"{_SCHEDULED_WAKE_JOB_SELECT} WHERE j.id = ?", (job_id,)).fetchone()
+
+
+def record_scheduled_wake_run(
+    *,
+    job_id: str,
+    device_id: str,
+    started_at: str,
+    finished_at: str | None,
+    result: str,
+    detail: str | None = None,
+    wake_log_id: int | None = None,
+) -> sqlite3.Row:
+    run_id = str(uuid.uuid4())
+    with get_conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO scheduled_wake_runs(
+                id,
+                job_id,
+                device_id,
+                started_at,
+                finished_at,
+                result,
+                detail,
+                wake_log_id
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                run_id,
+                job_id,
+                device_id,
+                started_at,
+                finished_at,
+                result,
+                detail,
+                wake_log_id,
+            ),
+        )
+        row = conn.execute("SELECT * FROM scheduled_wake_runs WHERE id = ?", (run_id,)).fetchone()
+        if row is None:
+            raise RuntimeError("scheduled wake run insert failed")
+        return row
+
+
+def list_scheduled_wake_runs(
+    *,
+    limit: int = 50,
+    job_id: str | None = None,
+    device_id: str | None = None,
+) -> list[sqlite3.Row]:
+    safe_limit = max(1, min(limit, 500))
+    params: list[object] = []
+    where_clauses: list[str] = []
+    if job_id:
+        where_clauses.append("r.job_id = ?")
+        params.append(job_id)
+    if device_id:
+        where_clauses.append("r.device_id = ?")
+        params.append(device_id)
+
+    query = """
+        SELECT
+            r.*,
+            h.name AS device_name,
+            h.display_name AS device_display_name,
+            j.label AS job_label
+        FROM scheduled_wake_runs r
+        LEFT JOIN hosts h ON h.id = r.device_id
+        LEFT JOIN scheduled_wake_jobs j ON j.id = r.job_id
+    """
+    if where_clauses:
+        query += " WHERE " + " AND ".join(where_clauses)
+    query += " ORDER BY r.started_at DESC, r.id DESC LIMIT ?"
+    params.append(safe_limit)
+
+    with get_conn() as conn:
+        rows = conn.execute(query, tuple(params)).fetchall()
+        return list(rows)
+
+
 def update_host(host_id: str, updates: dict[str, object | None]) -> bool:
     if not updates:
         return False
 
-    columns = ", ".join([f"{key} = ?" for key in updates.keys()])
-    values = list(updates.values())
+    normalized_updates = dict(updates)
+    normalized_updates["updated_at"] = datetime.now(UTC).isoformat()
+    columns = ", ".join([f"{key} = ?" for key in normalized_updates.keys()])
+    values = list(normalized_updates.values())
     values.append(host_id)
 
     with get_conn() as conn:
@@ -626,7 +1201,7 @@ def update_host(host_id: str, updates: dict[str, object | None]) -> bool:
 
 def delete_host(host_id: str) -> bool:
     with get_conn() as conn:
-        conn.execute("DELETE FROM user_device_access WHERE device_id = ?", (host_id,))
+        conn.execute("DELETE FROM device_memberships WHERE device_id = ?", (host_id,))
         conn.execute("DELETE FROM wake_logs WHERE host_id = ?", (host_id,))
         conn.execute("DELETE FROM power_check_logs WHERE device_id = ?", (host_id,))
         cur = conn.execute("DELETE FROM hosts WHERE id = ?", (host_id,))
@@ -636,8 +1211,8 @@ def delete_host(host_id: str) -> bool:
 def update_host_power_state(host_id: str, state: str, checked_at: str) -> None:
     with get_conn() as conn:
         conn.execute(
-            "UPDATE hosts SET last_power_state = ?, last_power_checked_at = ? WHERE id = ?",
-            (state, checked_at, host_id),
+            "UPDATE hosts SET last_power_state = ?, last_power_checked_at = ?, updated_at = ? WHERE id = ?",
+            (state, checked_at, checked_at, host_id),
         )
 
 
@@ -669,60 +1244,6 @@ def list_power_check_logs(limit: int = 100) -> list[sqlite3.Row]:
             LIMIT ?
             """,
             (limit,),
-        ).fetchall()
-        return list(rows)
-
-
-def assign_device_to_user(user_id: int, device_id: str) -> None:
-    now = datetime.now(UTC).isoformat()
-    with get_conn() as conn:
-        conn.execute(
-            """
-            INSERT OR IGNORE INTO user_device_access(user_id, device_id, created_at)
-            VALUES (?, ?, ?)
-            """,
-            (user_id, device_id, now),
-        )
-
-
-def remove_assignment(user_id: int, device_id: str) -> bool:
-    with get_conn() as conn:
-        cur = conn.execute(
-            "DELETE FROM user_device_access WHERE user_id = ? AND device_id = ?",
-            (user_id, device_id),
-        )
-        return cur.rowcount > 0
-
-
-def is_device_assigned_to_user(user_id: int, device_id: str) -> bool:
-    with get_conn() as conn:
-        row = conn.execute(
-            """
-            SELECT 1
-            FROM user_device_access
-            WHERE user_id = ? AND device_id = ?
-            LIMIT 1
-            """,
-            (user_id, device_id),
-        ).fetchone()
-        return row is not None
-
-
-def list_assignments() -> list[sqlite3.Row]:
-    with get_conn() as conn:
-        rows = conn.execute(
-            """
-            SELECT
-                uda.user_id,
-                u.username,
-                uda.device_id,
-                h.name AS device_name,
-                uda.created_at
-            FROM user_device_access uda
-            INNER JOIN users u ON u.id = uda.user_id
-            INNER JOIN hosts h ON h.id = uda.device_id
-            ORDER BY u.username COLLATE NOCASE ASC, h.name COLLATE NOCASE ASC
-            """
         ).fetchall()
         return list(rows)
 
@@ -815,10 +1336,10 @@ def log_wake(
     result: str = "sent",
     error_detail: str | None = None,
     precheck_state: str = "unknown",
-) -> None:
+) -> int:
     now = datetime.now(UTC).isoformat()
     with get_conn() as conn:
-        conn.execute(
+        cur = conn.execute(
             """
             INSERT INTO wake_logs(
                 host_id,
@@ -833,6 +1354,7 @@ def log_wake(
             """,
             (host_id, actor_username, sent_to, now, result, error_detail, precheck_state),
         )
+        return int(cur.lastrowid)
 
 
 def list_wake_logs(limit: int = 100) -> list[sqlite3.Row]:

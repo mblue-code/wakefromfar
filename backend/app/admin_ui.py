@@ -4,7 +4,7 @@ import html
 import json
 from datetime import UTC, datetime
 from pathlib import Path
-from urllib.parse import urlencode, urlparse
+from urllib.parse import parse_qsl, urlencode, urlparse
 
 from fastapi import APIRouter, BackgroundTasks, Form, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
@@ -14,29 +14,37 @@ from .discovery import collect_discovery_candidates, discover_sender_bindings, n
 from .diagnostics import device_diagnostic_hints
 from .network import build_network_diagnostics_snapshot
 from .db import (
-    assign_device_to_user,
     complete_discovery_run,
     count_admin_users,
     create_host,
+    create_device_membership,
     create_discovery_candidate,
     create_discovery_run,
+    create_scheduled_wake_job,
     create_user,
+    delete_scheduled_wake_job,
+    delete_device_membership,
     delete_host,
     delete_user,
     fail_discovery_run,
     get_discovery_candidate,
     get_discovery_run,
+    get_device_membership_by_id,
+    get_device_membership_for_user_device,
     get_host_by_mac,
     get_host_by_id,
+    get_scheduled_wake_job,
     get_user_by_id,
     get_user_by_username,
     list_discovery_candidates,
     list_discovery_events,
     list_discovery_runs,
     list_admin_audit_logs,
-    list_assignments,
+    list_device_memberships,
     list_hosts,
     list_power_check_logs,
+    list_scheduled_wake_jobs,
+    list_scheduled_wake_runs,
     list_users,
     list_wake_logs,
     log_admin_action,
@@ -44,7 +52,8 @@ from .db import (
     log_power_check,
     mark_discovery_candidate_imported,
     mark_discovery_run_running,
-    remove_assignment,
+    update_scheduled_wake_job,
+    update_device_membership,
     update_host,
     update_host_power_state,
     update_user_password_by_id,
@@ -54,6 +63,7 @@ from .power import run_power_check
 from .password_policy import min_password_length_for_role
 from .rate_limit import get_rate_limiter
 from .request_context import get_request_ip, is_https_request
+from .scheduled_wakes import DAY_ORDER, compute_next_run_at_iso, normalize_schedule_definition, parse_days_of_week_json
 from .security import create_token, decode_token, hash_password, verify_password
 from .telemetry import get_counters
 from .wol import normalize_mac, resolve_target, send_magic_packet
@@ -69,7 +79,8 @@ _I18N = {
         "nav_dashboard": "Dashboard",
         "nav_users": "Users",
         "nav_devices": "Devices",
-        "nav_assignments": "Assignments",
+        "nav_scheduled_wakes": "Scheduled Wakes",
+        "nav_device_access": "Device Access",
         "nav_invites": "Invites",
         "nav_diagnostics": "Diagnostics",
         "nav_discovery": "Discovery",
@@ -92,7 +103,10 @@ _I18N = {
         "title_admin_dashboard": "Admin Dashboard",
         "title_users": "Users",
         "title_devices": "Devices",
-        "title_assignments": "Assignments",
+        "title_scheduled_wakes": "Scheduled Wakes",
+        "title_new_scheduled_wake": "New Scheduled Wake",
+        "title_edit_scheduled_wake": "Edit Scheduled Wake",
+        "title_device_access": "Device Access",
         "title_invites": "Invites",
         "title_wake_logs": "Wake Logs",
         "title_power_check_logs": "Power Check Logs",
@@ -103,7 +117,8 @@ _I18N = {
         "title_pilot_metrics": "Pilot Metrics",
         "card_users": "Users",
         "card_devices": "Devices",
-        "card_assignments": "Assignments",
+        "card_scheduled_wakes": "Scheduled Wakes",
+        "card_device_access": "Device Access",
         "card_invites": "Invites",
         "heading_recent_wake_logs": "Recent Wake Logs",
         "heading_recent_power_checks": "Recent Power Checks",
@@ -111,8 +126,13 @@ _I18N = {
         "heading_users": "Users",
         "heading_create_device": "Create Device",
         "heading_devices": "Devices",
-        "heading_create_assignment": "Create Assignment",
-        "heading_assignments": "Assignments",
+        "heading_schedule_filters": "Schedule Filters",
+        "heading_scheduled_wakes": "Scheduled Wakes",
+        "heading_create_scheduled_wake": "Create Scheduled Wake",
+        "heading_edit_scheduled_wake": "Edit Scheduled Wake",
+        "heading_recent_scheduled_wake_runs": "Recent Scheduled Wake Runs",
+        "heading_grant_device_access": "Grant Device Access",
+        "heading_device_access": "Current Device Access",
         "heading_new_invite": "New Invite",
         "heading_create_invite": "Create Invite",
         "heading_invites": "Invites",
@@ -128,13 +148,17 @@ _I18N = {
         "heading_pilot_metrics": "Pilot Metrics",
         "col_id": "ID",
         "col_user_id": "User ID",
+        "col_user": "User",
         "col_username": "Username",
         "col_role": "Role",
         "col_created": "Created",
+        "col_updated": "Updated",
         "col_created_by": "Created By",
         "col_update": "Update",
         "col_delete": "Delete",
         "col_name": "Name",
+        "col_label": "Label",
+        "col_enabled": "Enabled",
         "col_interface": "Interface",
         "col_display": "Display",
         "col_mac": "MAC",
@@ -149,6 +173,15 @@ _I18N = {
         "col_port": "Port",
         "col_state": "State",
         "col_checked_at": "Checked At",
+        "col_timezone": "Timezone",
+        "col_days": "Days",
+        "col_local_time": "Local Time",
+        "col_next_run": "Next Run",
+        "col_last_run": "Last Run",
+        "col_recent_result": "Recent Result",
+        "col_started_at": "Started At",
+        "col_finished_at": "Finished At",
+        "col_schedules": "Schedules",
         "col_diagnostics": "Diagnostics",
         "col_actions": "Actions",
         "col_device_id": "Device ID",
@@ -173,6 +206,12 @@ _I18N = {
         "col_run_id": "Run ID",
         "col_status": "Status",
         "col_summary": "Summary",
+        "col_view_status": "View Status",
+        "col_wake": "Wake",
+        "col_request_shutdown": "Shutdown",
+        "col_manage_schedule": "Manage Schedule",
+        "col_favorite": "Favorite",
+        "col_sort_order": "Sort Order",
         "col_wol_confidence": "WoL Confidence",
         "col_source_network": "Source Network",
         "col_imported_host": "Imported Host",
@@ -199,14 +238,22 @@ _I18N = {
         "placeholder_power_ports": "power probe ports, e.g. 22,80,443,445",
         "placeholder_actor_filter": "actor filter",
         "placeholder_device_id_filter": "device id filter",
+        "placeholder_sort_order": "sort order",
         "option_all_results": "all results",
         "option_all_methods": "all methods",
         "action_save": "Save",
         "action_delete": "Delete",
+        "action_edit": "Edit",
         "action_create": "Create",
+        "action_create_schedule": "Create Schedule",
+        "action_update_schedule": "Update Schedule",
+        "action_enable": "Enable",
+        "action_disable": "Disable",
+        "action_manage_schedules": "Manage Schedules",
+        "action_add_schedule": "Add Schedule",
         "action_test_power_check": "Test Power Check",
-        "action_assign": "Assign",
-        "action_remove": "Remove",
+        "action_grant_access": "Grant access",
+        "action_remove": "Remove access",
         "action_create_invite": "Create Invite",
         "action_revoke": "Revoke",
         "action_filter": "Filter",
@@ -217,10 +264,22 @@ _I18N = {
         "action_bulk_import": "Bulk Import",
         "confirm_delete_user": "Delete user '{username}'?",
         "confirm_delete_device": "Delete device '{device}'?",
-        "confirm_remove_assignment": "Remove this assignment?",
+        "confirm_delete_schedule": "Delete scheduled wake '{label}'?",
+        "confirm_remove_device_access": "Remove access for '{username}' to '{device}'?",
         "confirm_revoke_invite": "Revoke this invite?",
         "label_token": "Token",
         "label_link": "Link",
+        "label_can_view_status": "Can view status",
+        "label_can_wake": "Can wake",
+        "label_can_request_shutdown": "Can request shutdown",
+        "label_can_manage_schedule": "Can manage schedule",
+        "label_is_favorite": "Favorite",
+        "label_sort_order": "Sort order",
+        "label_enabled": "Enabled",
+        "label_timezone": "Timezone",
+        "label_days_of_week": "Days of week",
+        "label_local_time": "Local time",
+        "label_filter_enabled": "Enabled state",
         "alt_invite_qr_code": "Invite QR Code",
         "error_invalid_role": "Invalid role",
         "error_password_min_length_user": "Password must be at least 10 characters",
@@ -232,8 +291,14 @@ _I18N = {
         "error_cannot_delete_last_admin": "Cannot delete last admin",
         "error_invalid_check_method": "Invalid check_method",
         "error_check_port_integer": "check_port must be integer",
+        "error_invalid_timezone": "Invalid timezone",
+        "error_invalid_local_time": "local_time must use HH:MM",
+        "error_schedule_days_required": "Select at least one day",
+        "error_schedule_label_required": "Label is required",
+        "error_schedule_not_found": "Scheduled wake not found",
+        "error_sort_order_integer": "sort_order must be integer",
         "error_device_not_found": "Device not found",
-        "error_assignment_not_found": "Assignment not found",
+        "error_device_access_not_found": "Membership not found",
         "error_username_not_found": "Username not found",
         "error_expires_in_hours_range": "expires_in_hours out of range",
         "error_invite_not_found_or_claimed": "Invite not found or already claimed",
@@ -243,9 +308,15 @@ _I18N = {
         "msg_device_created": "Created device {device_id}",
         "msg_device_updated": "Updated device {device_id}",
         "msg_device_deleted": "Deleted device {device_id}",
+        "msg_schedule_created": "Created scheduled wake '{label}'",
+        "msg_schedule_updated": "Updated scheduled wake '{label}'",
+        "msg_schedule_deleted": "Deleted scheduled wake '{label}'",
+        "msg_schedule_enabled": "Enabled scheduled wake '{label}'",
+        "msg_schedule_disabled": "Disabled scheduled wake '{label}'",
         "msg_power_check_result": "Power check {result} ({detail})",
-        "msg_assignment_saved": "Assignment saved",
-        "msg_assignment_removed": "Assignment removed",
+        "msg_membership_created": "Granted device access for '{username}' to '{device}'",
+        "msg_membership_updated": "Updated permissions for '{username}' on '{device}'",
+        "msg_membership_deleted": "Removed device access for '{username}' to '{device}'",
         "msg_invite_created_for": "Invite created for {username}",
         "msg_invite_revoked": "Invite revoked",
         "msg_discovery_run_started": "Discovery run started: {run_id}",
@@ -260,6 +331,22 @@ _I18N = {
         "text_target_90": "target: 90%",
         "value_yes": "yes",
         "value_no": "no",
+        "text_no_schedules": "No scheduled wakes found.",
+        "text_no_schedule_runs": "No recent scheduled wake runs found.",
+        "text_schedule_summary_none": "No schedules",
+        "text_schedule_summary_disabled": "{total} configured, all disabled",
+        "text_schedule_summary_active": "{enabled} active of {total}",
+        "option_all_devices": "all devices",
+        "option_enabled_all": "all",
+        "option_enabled_only": "enabled only",
+        "option_disabled_only": "disabled only",
+        "day_mon": "Mon",
+        "day_tue": "Tue",
+        "day_wed": "Wed",
+        "day_thu": "Thu",
+        "day_fri": "Fri",
+        "day_sat": "Sat",
+        "day_sun": "Sun",
         "error_discovery_disabled": "Discovery feature is disabled",
         "error_no_discovery_bindings": "No valid discovery source bindings available",
         "text_active_sender_bindings": "Active sender bindings",
@@ -271,7 +358,8 @@ _I18N = {
         "nav_dashboard": "Dashboard",
         "nav_users": "Benutzer",
         "nav_devices": "Geräte",
-        "nav_assignments": "Zuweisungen",
+        "nav_scheduled_wakes": "Geplante Wakes",
+        "nav_device_access": "Gerätezugriff",
         "nav_invites": "Einladungen",
         "nav_diagnostics": "Diagnose",
         "nav_discovery": "Discovery",
@@ -294,7 +382,10 @@ _I18N = {
         "title_admin_dashboard": "Admin-Dashboard",
         "title_users": "Benutzer",
         "title_devices": "Geräte",
-        "title_assignments": "Zuweisungen",
+        "title_scheduled_wakes": "Geplante Wakes",
+        "title_new_scheduled_wake": "Geplanten Wake anlegen",
+        "title_edit_scheduled_wake": "Geplanten Wake bearbeiten",
+        "title_device_access": "Gerätezugriff",
         "title_invites": "Einladungen",
         "title_wake_logs": "Wake-Logs",
         "title_power_check_logs": "Power-Check-Logs",
@@ -305,7 +396,8 @@ _I18N = {
         "title_pilot_metrics": "Pilot-Metriken",
         "card_users": "Benutzer",
         "card_devices": "Geräte",
-        "card_assignments": "Zuweisungen",
+        "card_scheduled_wakes": "Geplante Wakes",
+        "card_device_access": "Gerätezugriff",
         "card_invites": "Einladungen",
         "heading_recent_wake_logs": "Neueste Wake-Logs",
         "heading_recent_power_checks": "Neueste Power-Checks",
@@ -313,8 +405,13 @@ _I18N = {
         "heading_users": "Benutzer",
         "heading_create_device": "Gerät erstellen",
         "heading_devices": "Geräte",
-        "heading_create_assignment": "Zuweisung erstellen",
-        "heading_assignments": "Zuweisungen",
+        "heading_schedule_filters": "Schedule-Filter",
+        "heading_scheduled_wakes": "Geplante Wakes",
+        "heading_create_scheduled_wake": "Geplanten Wake anlegen",
+        "heading_edit_scheduled_wake": "Geplanten Wake bearbeiten",
+        "heading_recent_scheduled_wake_runs": "Letzte Läufe geplanter Wakes",
+        "heading_grant_device_access": "Gerätezugriff vergeben",
+        "heading_device_access": "Aktueller Gerätezugriff",
         "heading_new_invite": "Neue Einladung",
         "heading_create_invite": "Einladung erstellen",
         "heading_invites": "Einladungen",
@@ -330,13 +427,17 @@ _I18N = {
         "heading_pilot_metrics": "Pilot-Metriken",
         "col_id": "ID",
         "col_user_id": "Benutzer-ID",
+        "col_user": "Benutzer",
         "col_username": "Benutzername",
         "col_role": "Rolle",
         "col_created": "Erstellt",
+        "col_updated": "Aktualisiert",
         "col_created_by": "Erstellt von",
         "col_update": "Aktualisieren",
         "col_delete": "Löschen",
         "col_name": "Name",
+        "col_label": "Bezeichnung",
+        "col_enabled": "Aktiv",
         "col_interface": "Interface",
         "col_display": "Anzeige",
         "col_mac": "MAC",
@@ -351,6 +452,15 @@ _I18N = {
         "col_port": "Port",
         "col_state": "Status",
         "col_checked_at": "Geprüft am",
+        "col_timezone": "Zeitzone",
+        "col_days": "Tage",
+        "col_local_time": "Lokale Uhrzeit",
+        "col_next_run": "Nächster Lauf",
+        "col_last_run": "Letzter Lauf",
+        "col_recent_result": "Letztes Ergebnis",
+        "col_started_at": "Gestartet am",
+        "col_finished_at": "Beendet am",
+        "col_schedules": "Zeitpläne",
         "col_diagnostics": "Diagnose",
         "col_actions": "Aktionen",
         "col_device_id": "Geräte-ID",
@@ -375,6 +485,12 @@ _I18N = {
         "col_run_id": "Run-ID",
         "col_status": "Status",
         "col_summary": "Zusammenfassung",
+        "col_view_status": "Status sehen",
+        "col_wake": "Aufwecken",
+        "col_request_shutdown": "Shutdown anfragen",
+        "col_manage_schedule": "Zeitplan verwalten",
+        "col_favorite": "Favorit",
+        "col_sort_order": "Sortierung",
         "col_wol_confidence": "WoL-Vertrauen",
         "col_source_network": "Quellnetz",
         "col_imported_host": "Importierter Host",
@@ -401,14 +517,22 @@ _I18N = {
         "placeholder_power_ports": "Power-Probe-Ports, z. B. 22, 80, 443, 445",
         "placeholder_actor_filter": "Auslöser-Filter",
         "placeholder_device_id_filter": "Geräte-ID-Filter",
+        "placeholder_sort_order": "Sortierung",
         "option_all_results": "Alle Ergebnisse",
         "option_all_methods": "Alle Methoden",
         "action_save": "Speichern",
         "action_delete": "Löschen",
+        "action_edit": "Bearbeiten",
         "action_create": "Erstellen",
+        "action_create_schedule": "Zeitplan anlegen",
+        "action_update_schedule": "Zeitplan speichern",
+        "action_enable": "Aktivieren",
+        "action_disable": "Deaktivieren",
+        "action_manage_schedules": "Zeitpläne verwalten",
+        "action_add_schedule": "Zeitplan anlegen",
         "action_test_power_check": "Power-Check testen",
-        "action_assign": "Zuweisen",
-        "action_remove": "Entfernen",
+        "action_grant_access": "Zugriff vergeben",
+        "action_remove": "Zugriff entfernen",
         "action_create_invite": "Einladung erstellen",
         "action_revoke": "Widerrufen",
         "action_filter": "Filtern",
@@ -419,10 +543,22 @@ _I18N = {
         "action_bulk_import": "Bulk-Import",
         "confirm_delete_user": "Benutzer '{username}' löschen?",
         "confirm_delete_device": "Gerät '{device}' löschen?",
-        "confirm_remove_assignment": "Diese Zuweisung entfernen?",
+        "confirm_delete_schedule": "Geplanten Wake '{label}' löschen?",
+        "confirm_remove_device_access": "Zugriff von '{username}' auf '{device}' entfernen?",
         "confirm_revoke_invite": "Diese Einladung widerrufen?",
         "label_token": "Token",
         "label_link": "Link",
+        "label_can_view_status": "Status sehen",
+        "label_can_wake": "Aufwecken",
+        "label_can_request_shutdown": "Shutdown anfragen",
+        "label_can_manage_schedule": "Zeitplan verwalten",
+        "label_is_favorite": "Favorit",
+        "label_sort_order": "Sortierung",
+        "label_enabled": "Aktiv",
+        "label_timezone": "Zeitzone",
+        "label_days_of_week": "Wochentage",
+        "label_local_time": "Lokale Uhrzeit",
+        "label_filter_enabled": "Aktiv-Status",
         "alt_invite_qr_code": "Einladungs-QR-Code",
         "error_invalid_role": "Ungültige Rolle",
         "error_password_min_length_user": "Passwort muss mindestens 10 Zeichen haben",
@@ -434,8 +570,14 @@ _I18N = {
         "error_cannot_delete_last_admin": "Letzter Admin kann nicht gelöscht werden",
         "error_invalid_check_method": "Ungültige check_method",
         "error_check_port_integer": "check_port muss eine ganze Zahl sein",
+        "error_invalid_timezone": "Ungültige Zeitzone",
+        "error_invalid_local_time": "local_time muss HH:MM verwenden",
+        "error_schedule_days_required": "Mindestens ein Tag muss ausgewählt sein",
+        "error_schedule_label_required": "Bezeichnung ist erforderlich",
+        "error_schedule_not_found": "Geplanter Wake nicht gefunden",
+        "error_sort_order_integer": "sort_order muss eine ganze Zahl sein",
         "error_device_not_found": "Gerät nicht gefunden",
-        "error_assignment_not_found": "Zuweisung nicht gefunden",
+        "error_device_access_not_found": "Mitgliedschaft nicht gefunden",
         "error_username_not_found": "Benutzername nicht gefunden",
         "error_expires_in_hours_range": "expires_in_hours außerhalb des Bereichs",
         "error_invite_not_found_or_claimed": "Einladung nicht gefunden oder bereits eingelöst",
@@ -445,9 +587,15 @@ _I18N = {
         "msg_device_created": "Gerät {device_id} erstellt",
         "msg_device_updated": "Gerät {device_id} aktualisiert",
         "msg_device_deleted": "Gerät {device_id} gelöscht",
+        "msg_schedule_created": "Geplanter Wake '{label}' erstellt",
+        "msg_schedule_updated": "Geplanter Wake '{label}' aktualisiert",
+        "msg_schedule_deleted": "Geplanter Wake '{label}' gelöscht",
+        "msg_schedule_enabled": "Geplanter Wake '{label}' aktiviert",
+        "msg_schedule_disabled": "Geplanter Wake '{label}' deaktiviert",
         "msg_power_check_result": "Power-Check {result} ({detail})",
-        "msg_assignment_saved": "Zuweisung gespeichert",
-        "msg_assignment_removed": "Zuweisung entfernt",
+        "msg_membership_created": "Gerätezugriff für '{username}' auf '{device}' vergeben",
+        "msg_membership_updated": "Berechtigungen für '{username}' auf '{device}' aktualisiert",
+        "msg_membership_deleted": "Gerätezugriff für '{username}' auf '{device}' entfernt",
         "msg_invite_created_for": "Einladung für {username} erstellt",
         "msg_invite_revoked": "Einladung widerrufen",
         "msg_discovery_run_started": "Discovery-Run gestartet: {run_id}",
@@ -462,6 +610,22 @@ _I18N = {
         "text_target_90": "Ziel: 90%",
         "value_yes": "ja",
         "value_no": "nein",
+        "text_no_schedules": "Keine geplanten Wakes gefunden.",
+        "text_no_schedule_runs": "Keine letzten Läufe geplanter Wakes gefunden.",
+        "text_schedule_summary_none": "Keine Zeitpläne",
+        "text_schedule_summary_disabled": "{total} konfiguriert, alle deaktiviert",
+        "text_schedule_summary_active": "{enabled} aktiv von {total}",
+        "option_all_devices": "alle Geräte",
+        "option_enabled_all": "alle",
+        "option_enabled_only": "nur aktiv",
+        "option_disabled_only": "nur deaktiviert",
+        "day_mon": "Mo",
+        "day_tue": "Di",
+        "day_wed": "Mi",
+        "day_thu": "Do",
+        "day_fri": "Fr",
+        "day_sat": "Sa",
+        "day_sun": "So",
         "error_discovery_disabled": "Discovery-Funktion ist deaktiviert",
         "error_no_discovery_bindings": "Keine gültigen Discovery-Quellbindungen verfügbar",
         "text_active_sender_bindings": "Aktive Sender-Bindings",
@@ -546,6 +710,198 @@ def _device_cell(device_id: str | None, name_map: dict[str, str]) -> str:
 def _badge(value: str) -> str:
     color = _BADGE_COLORS.get(value.lower(), "#666")
     return f'<span class="badge" style="background:{color}">{_esc(value)}</span>'
+
+
+def _checkbox_checked(value: object) -> str:
+    return "checked" if bool(value) else ""
+
+
+def _bool_text(request: Request, value: object) -> str:
+    return _tr(request, "value_yes") if bool(value) else _tr(request, "value_no")
+
+
+def _form_checkbox(value: str) -> bool:
+    return bool(value.strip())
+
+
+def _device_membership_device_label(row: dict) -> str:
+    display_name = str(row.get("device_display_name") or "").strip()
+    name = str(row.get("device_name") or "").strip()
+    device_id = str(row.get("device_id") or "").strip()
+    if display_name and name and display_name != name:
+        return f"{display_name} ({name})"
+    if display_name:
+        return display_name
+    if name:
+        return name
+    return device_id
+
+
+def _device_display_label(row: dict) -> str:
+    display_name = str(row.get("display_name") or "").strip()
+    name = str(row.get("name") or "").strip()
+    device_id = str(row.get("id") or "").strip()
+    if display_name and name and display_name != name:
+        return f"{display_name} ({name})"
+    if display_name:
+        return display_name
+    if name:
+        return name
+    return device_id
+
+
+def _schedule_validation_error(request: Request, detail: str) -> str:
+    mapping = {
+        "Invalid timezone": "error_invalid_timezone",
+        "timezone is required": "error_invalid_timezone",
+        "local_time must use HH:MM": "error_invalid_local_time",
+        "days_of_week must contain at least one day": "error_schedule_days_required",
+        "days_of_week must contain only mon,tue,wed,thu,fri,sat,sun": "error_schedule_days_required",
+    }
+    key = mapping.get(detail)
+    return _tr(request, key) if key else detail
+
+
+def _schedule_day_label(request: Request, day: str) -> str:
+    return _tr(request, f"day_{day}")
+
+
+def _format_schedule_days(request: Request, days_of_week: list[str]) -> str:
+    return ", ".join(_schedule_day_label(request, day) for day in days_of_week)
+
+
+def _schedule_summary_text(request: Request, row: dict) -> str:
+    total = int(row["scheduled_wake_total_count"] or 0)
+    enabled = int(row["scheduled_wake_enabled_count"] or 0)
+    if total <= 0:
+        return _tr(request, "text_schedule_summary_none")
+    if enabled <= 0:
+        return _tr(request, "text_schedule_summary_disabled", total=total)
+    return _tr(request, "text_schedule_summary_active", enabled=enabled, total=total)
+
+
+def _schedule_filter_path(request: Request, *, device_id: str | None = None, enabled: str | None = None) -> str:
+    params: dict[str, str] = {"lang": _lang(request)}
+    if device_id:
+        params["device_id"] = device_id
+    if enabled:
+        params["enabled"] = enabled
+    return f"/admin/ui/scheduled-wakes?{urlencode(params)}"
+
+
+def _schedule_form_path(request: Request, *, device_id: str | None = None) -> str:
+    params: dict[str, str] = {"lang": _lang(request)}
+    if device_id:
+        params["device_id"] = device_id
+    return f"/admin/ui/scheduled-wakes/new?{urlencode(params)}"
+
+
+def _resolve_scheduled_wake_form_values(
+    request: Request,
+    *,
+    device_id: str,
+    label: str,
+    enabled: bool,
+    timezone_name: str,
+    days_of_week: list[str],
+    local_time: str,
+    current_job: dict | None = None,
+) -> dict[str, object]:
+    resolved_device_id = device_id.strip() or str(current_job["device_id"] if current_job else "").strip()
+    resolved_label = label.strip() or str(current_job["label"] if current_job else "").strip()
+
+    if not resolved_label:
+        raise ValueError(_tr(request, "error_schedule_label_required"))
+    if not resolved_device_id or get_host_by_id(resolved_device_id) is None:
+        raise ValueError(_tr(request, "error_device_not_found"))
+
+    current_days = parse_days_of_week_json(str(current_job["days_of_week_json"])) if current_job else []
+    raw_days = days_of_week or current_days
+    raw_timezone = timezone_name.strip() or str(current_job["timezone"] if current_job else "").strip()
+    raw_local_time = local_time.strip() or str(current_job["local_time"] if current_job else "").strip()
+
+    try:
+        normalized_timezone, normalized_days, normalized_local_time = normalize_schedule_definition(
+            timezone_name=raw_timezone,
+            days_of_week=raw_days,
+            local_time=raw_local_time,
+        )
+    except ValueError as exc:
+        raise ValueError(_schedule_validation_error(request, str(exc))) from exc
+
+    next_run_at: str | None
+    if enabled:
+        next_run_at = compute_next_run_at_iso(
+            timezone_name=normalized_timezone,
+            days_of_week=normalized_days,
+            local_time=normalized_local_time,
+            now_utc=datetime.now(UTC),
+        )
+    else:
+        next_run_at = None
+
+    return {
+        "device_id": resolved_device_id,
+        "label": resolved_label,
+        "enabled": enabled,
+        "timezone": normalized_timezone,
+        "days_of_week": normalized_days,
+        "local_time": normalized_local_time,
+        "next_run_at": next_run_at,
+    }
+
+
+def _scheduled_wake_form_body(
+    request: Request,
+    *,
+    title: str,
+    action_path: str,
+    submit_label: str,
+    devices: list[dict],
+    values: dict[str, object],
+    return_to: str,
+) -> str:
+    t = lambda key, **kwargs: _tr(request, key, **kwargs)
+    device_options = "".join(
+        f'<option value="{_esc(row["id"])}" {"selected" if str(values.get("device_id") or "") == str(row["id"]) else ""}>'
+        f'{_esc(_device_display_label(dict(row)))}</option>'
+        for row in devices
+    )
+    selected_days = {str(day) for day in values.get("days_of_week", []) if str(day)}
+    day_checkboxes = "".join(
+        f'<label class="checkbox-item"><input type="checkbox" name="days_of_week" value="{day}" '
+        f'{"checked" if day in selected_days else ""} />{_esc(_schedule_day_label(request, day))}</label>'
+        for day in DAY_ORDER
+    )
+    checked = "checked" if bool(values.get("enabled", True)) else ""
+    return f"""
+    <article>
+      <h2>{_esc(title)}</h2>
+      <form method="post" action="{_esc(action_path)}" style="display:grid;gap:12px;max-width:760px;">
+        <input type="hidden" name="return_to" value="{_esc(return_to)}" />
+        <label class="stacked-cell">{t("col_device")}
+          <select name="device_id" required>{device_options}</select>
+        </label>
+        <label class="stacked-cell">{t("col_label")}
+          <input name="label" required value="{_esc(values.get('label'))}" />
+        </label>
+        <label class="checkbox-item"><input type="checkbox" name="enabled" value="1" {checked} />{t("label_enabled")}</label>
+        <label class="stacked-cell">{t("label_timezone")}
+          <input name="timezone" required value="{_esc(values.get('timezone'))}" placeholder="Europe/Berlin" />
+        </label>
+        <label class="stacked-cell">{t("label_days_of_week")}
+          <span class="checkbox-group">{day_checkboxes}</span>
+        </label>
+        <label class="stacked-cell">{t("label_local_time")}
+          <input name="local_time" required value="{_esc(values.get('local_time'))}" placeholder="07:30" />
+        </label>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <button type="submit">{_esc(submit_label)}</button>
+          <a href="{_esc(_with_lang(return_to, _lang(request)))}">{t("action_manage_schedules")}</a>
+        </div>
+      </form>
+    </article>
+    """
 
 
 def _safe_next_path(next_path: str | None) -> str:
@@ -637,7 +993,8 @@ def _layout(request: Request, title: str, body: str, admin_username: str, messag
         {_nav('/admin/ui', t('nav_dashboard'))}
         {_nav('/admin/ui/users', t('nav_users'))}
         {_nav('/admin/ui/devices', t('nav_devices'))}
-        {_nav('/admin/ui/assignments', t('nav_assignments'))}
+        {_nav('/admin/ui/scheduled-wakes', t('nav_scheduled_wakes'))}
+        {_nav('/admin/ui/device-memberships', t('nav_device_access'))}
         <div class="nav-sep"></div>
         {_nav('/admin/ui/wake-logs', t('nav_wake_logs'))}
         {_nav('/admin/ui/power-check-logs', t('nav_power_logs'))}
@@ -677,6 +1034,7 @@ p{margin:.35rem 0 .75rem}
 article{background:var(--card-bg);border:1px solid var(--card-border);border-radius:10px;padding:1rem;margin:0 0 1rem}
 button,input,select{font:inherit}
 input,select{width:100%;max-width:100%;padding:.45rem .6rem;border:1px solid var(--input-border);border-radius:8px;background:var(--input-bg);color:var(--input-fg)}
+input[type="checkbox"]{width:auto}
 button{padding:.45rem .85rem;border:1px solid var(--btn-border);border-radius:8px;background:var(--btn-bg);color:#fff;cursor:pointer}
 button:hover{filter:brightness(.95)}
 button.secondary{background:var(--btn2-bg);color:var(--btn2-fg);border-color:var(--btn2-border)}
@@ -714,12 +1072,20 @@ main.container-fluid{padding:1.5rem;flex:1}
 .badge{display:inline-block;padding:.2em .55em;border-radius:99px;font-size:.75rem;font-weight:600;color:#fff;white-space:nowrap}
 form{margin-bottom:0}
 figure{overflow-x:auto;margin:0 0 1rem}
+.checkbox-group{display:flex;gap:.75rem;flex-wrap:wrap}
+.checkbox-item{display:flex;align-items:center;gap:.35rem;white-space:nowrap}
+.membership-create-form{display:grid;grid-template-columns:repeat(2,minmax(220px,1fr));gap:.85rem;margin-bottom:1.5rem}
+.membership-table form{display:grid;gap:.5rem}
+.membership-permissions{display:grid;grid-template-columns:repeat(2,minmax(150px,1fr));gap:.35rem .75rem}
+.stacked-cell{display:grid;gap:.2rem}
+.muted{color:var(--muted);font-size:.85em}
 @media(max-width:768px){
   .admin-shell{grid-template-columns:1fr}
   .sidebar{position:static;height:auto}
   .sidebar nav{flex-direction:row;flex-wrap:wrap;padding:.25rem}
   .sidebar nav a{padding:.35rem .6rem;font-size:.8rem}
   .stat-cards{grid-template-columns:repeat(2,1fr)}
+  .membership-create-form,.membership-permissions{grid-template-columns:1fr}
 }"""
 
     js = """document.querySelectorAll('form[data-confirm]').forEach(function(f){
@@ -785,14 +1151,16 @@ document.querySelectorAll('.flash').forEach(function(el){
 
 
 def _redirect(path: str, message: str | None = None, error: str | None = None, request: Request | None = None) -> RedirectResponse:
-    params: dict[str, str] = {}
+    parsed = urlparse(path)
+    base_path = parsed.path or path
+    params = dict(parse_qsl(parsed.query, keep_blank_values=True))
     if message:
         params["message"] = message
     if error:
         params["error"] = error
     if request is not None:
         params["lang"] = _lang(request)
-    location = path if not params else f"{path}?{urlencode(params)}"
+    location = base_path if not params else f"{base_path}?{urlencode(params)}"
     response = RedirectResponse(location, status_code=303)
     if request is not None:
         _apply_lang_cookie(request, response)
@@ -1105,7 +1473,8 @@ def dashboard(request: Request):
     t = lambda key, **kwargs: _tr(request, key, **kwargs)
     users = list_users()
     devices = list_hosts()
-    assignments = list_assignments()
+    scheduled_wakes = list_scheduled_wake_jobs(limit=200)
+    memberships = list_device_memberships()
     wake_logs = list_wake_logs(limit=10)
     power_logs = list_power_check_logs(limit=10)
     device_name_map = {str(h["id"]): str(h["name"]) for h in devices}
@@ -1132,7 +1501,8 @@ def dashboard(request: Request):
     <div class="stat-cards">
       <article class="stat-card"><strong class="stat-number">{len(users)}</strong><span class="stat-label">{t("card_users")}</span></article>
       <article class="stat-card"><strong class="stat-number">{len(devices)}</strong><span class="stat-label">{t("card_devices")}</span></article>
-      <article class="stat-card"><strong class="stat-number">{len(assignments)}</strong><span class="stat-label">{t("card_assignments")}</span></article>
+      <article class="stat-card"><strong class="stat-number">{len(scheduled_wakes)}</strong><span class="stat-label">{t("card_scheduled_wakes")}</span></article>
+      <article class="stat-card"><strong class="stat-number">{len(memberships)}</strong><span class="stat-label">{t("card_device_access")}</span></article>
     </div>
     <h2>{t("heading_recent_wake_logs")}</h2>
     <figure><table>
@@ -1291,6 +1661,13 @@ def devices_page(request: Request):
           <td>{_esc(row['last_power_state'])}</td><td>{_esc(row['last_power_checked_at'])}</td>
           <td>{"<br/>".join(_esc(hint) for hint in device_diagnostic_hints(dict(row)))}</td>
           <td>
+            <div class="stacked-cell">
+              <span>{_esc(_schedule_summary_text(request, dict(row)))}</span>
+              <a href="{_esc(_schedule_filter_path(request, device_id=str(row['id'])))}">{t("action_manage_schedules")}</a>
+              <a href="{_esc(_schedule_form_path(request, device_id=str(row['id'])))}">{t("action_add_schedule")}</a>
+            </div>
+          </td>
+          <td>
             <form method="post" action="/admin/ui/devices/{_esc(row['id'])}/update" style="display:grid;gap:4px;">
               <input name="name" value="{_esc(row['name'])}" />
               <input name="display_name" value="{_esc(row['display_name'])}" placeholder="{t("placeholder_display_name")}" />
@@ -1335,7 +1712,7 @@ def devices_page(request: Request):
     </form>
     <h2>{t("heading_devices")}</h2>
     <figure><table>
-      <thead><tr><th>{t("col_id")}</th><th>{t("col_name")}</th><th>{t("col_display")}</th><th>{t("col_mac")}</th><th>{t("col_method")}</th><th>{t("col_target")}</th><th>{t("col_port")}</th><th>{t("col_state")}</th><th>{t("col_checked_at")}</th><th>{t("col_diagnostics")}</th><th>{t("col_update")}</th><th>{t("col_actions")}</th></tr></thead>
+      <thead><tr><th>{t("col_id")}</th><th>{t("col_name")}</th><th>{t("col_display")}</th><th>{t("col_mac")}</th><th>{t("col_method")}</th><th>{t("col_target")}</th><th>{t("col_port")}</th><th>{t("col_state")}</th><th>{t("col_checked_at")}</th><th>{t("col_diagnostics")}</th><th>{t("col_schedules")}</th><th>{t("col_update")}</th><th>{t("col_actions")}</th></tr></thead>
       <tbody>{table_rows}</tbody>
     </table></figure>
     """
@@ -1507,80 +1884,660 @@ def devices_test_power_check(request: Request, device_id: str):
     )
 
 
-@router.get("/assignments", response_class=HTMLResponse)
-def assignments_page(request: Request):
+@router.get("/scheduled-wakes", response_class=HTMLResponse)
+def scheduled_wakes_page(
+    request: Request,
+    device_id: str | None = None,
+    enabled: str = "all",
+):
+    admin = _require_admin_or_redirect(request)
+    if isinstance(admin, RedirectResponse):
+        return admin
+    t = lambda key, **kwargs: _tr(request, key, **kwargs)
+    selected_device_id = (device_id or "").strip()
+    enabled_filter = enabled if enabled in {"all", "enabled", "disabled"} else "all"
+    enabled_value = None if enabled_filter == "all" else enabled_filter == "enabled"
+    devices = list_hosts()
+    jobs = list_scheduled_wake_jobs(limit=200, device_id=selected_device_id or None, enabled=enabled_value)
+    runs = list_scheduled_wake_runs(limit=20, device_id=selected_device_id or None)
+    message, error = _msg(request)
+
+    device_options = "".join(
+        f'<option value="{_esc(row["id"])}" {"selected" if selected_device_id == str(row["id"]) else ""}>'
+        f'{_esc(_device_display_label(dict(row)))}</option>'
+        for row in devices
+    )
+    if device_options:
+        device_options = f'<option value="">{t("option_all_devices")}</option>{device_options}'
+    enabled_options = "".join(
+        (
+            f'<option value="all" {"selected" if enabled_filter == "all" else ""}>{t("option_enabled_all")}</option>',
+            f'<option value="enabled" {"selected" if enabled_filter == "enabled" else ""}>{t("option_enabled_only")}</option>',
+            f'<option value="disabled" {"selected" if enabled_filter == "disabled" else ""}>{t("option_disabled_only")}</option>',
+        )
+    )
+    rows_html = "".join(
+        f"""
+        <tr>
+          <td>{_esc(row['label'])}</td>
+          <td>{_esc(_device_membership_device_label(dict(row)))}</td>
+          <td>{_badge('yes' if row['enabled'] else 'no')}</td>
+          <td>{_esc(row['timezone'])}</td>
+          <td>{_esc(_format_schedule_days(request, parse_days_of_week_json(str(row['days_of_week_json']))))}</td>
+          <td>{_esc(row['local_time'])}</td>
+          <td>{_esc(row['next_run_at'])}</td>
+          <td>{_esc(row['last_run_at'])}</td>
+          <td>{_esc(row['recent_run_result'])}{f"<br><span class='muted'>{_esc(row['recent_run_started_at'])}</span>" if row['recent_run_started_at'] else ""}</td>
+          <td>
+            <div class="stacked-cell">
+              <a href="{_esc(_with_lang(f"/admin/ui/scheduled-wakes/{row['id']}/edit", _lang(request)))}">{t("action_edit")}</a>
+              <form method="post" action="/admin/ui/scheduled-wakes/{_esc(row['id'])}/toggle">
+                <input type="hidden" name="return_to" value="{_esc(_schedule_filter_path(request, device_id=selected_device_id or None, enabled=enabled_filter))}" />
+                <button type="submit" class="secondary">{t("action_disable") if row['enabled'] else t("action_enable")}</button>
+              </form>
+              <form method="post" action="/admin/ui/scheduled-wakes/{_esc(row['id'])}/delete" data-confirm="{_esc(t('confirm_delete_schedule', label=str(row['label'])))}">
+                <input type="hidden" name="return_to" value="{_esc(_schedule_filter_path(request, device_id=selected_device_id or None, enabled=enabled_filter))}" />
+                <button type="submit" class="secondary">{t("action_delete")}</button>
+              </form>
+            </div>
+          </td>
+        </tr>
+        """
+        for row in jobs
+    ) or f'<tr><td colspan="10">{t("text_no_schedules")}</td></tr>'
+    runs_html = "".join(
+        f"""
+        <tr>
+          <td>{_esc(row['job_label'])}</td>
+          <td>{_esc(_device_membership_device_label(dict(row)))}</td>
+          <td>{_badge(str(row['result']))}</td>
+          <td>{_esc(row['detail'])}</td>
+          <td>{_esc(row['started_at'])}</td>
+          <td>{_esc(row['finished_at'])}</td>
+        </tr>
+        """
+        for row in runs
+    ) or f'<tr><td colspan="6">{t("text_no_schedule_runs")}</td></tr>'
+    body = f"""
+    <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;">
+      <h2>{t("heading_scheduled_wakes")}</h2>
+      <a href="{_esc(_schedule_form_path(request, device_id=selected_device_id or None))}">{t("action_create_schedule")}</a>
+    </div>
+    <article>
+      <h2>{t("heading_schedule_filters")}</h2>
+      <form method="get" action="/admin/ui/scheduled-wakes" style="display:flex;gap:8px;flex-wrap:wrap;align-items:end;">
+        <input type="hidden" name="lang" value="{_esc(_lang(request))}" />
+        <label class="stacked-cell">{t("col_device")}
+          <select name="device_id">{device_options}</select>
+        </label>
+        <label class="stacked-cell">{t("label_filter_enabled")}
+          <select name="enabled">{enabled_options}</select>
+        </label>
+        <button type="submit">{t("action_filter")}</button>
+      </form>
+    </article>
+    <figure><table>
+      <thead><tr><th>{t("col_label")}</th><th>{t("col_device")}</th><th>{t("col_enabled")}</th><th>{t("col_timezone")}</th><th>{t("col_days")}</th><th>{t("col_local_time")}</th><th>{t("col_next_run")}</th><th>{t("col_last_run")}</th><th>{t("col_recent_result")}</th><th>{t("col_actions")}</th></tr></thead>
+      <tbody>{rows_html}</tbody>
+    </table></figure>
+    <h2>{t("heading_recent_scheduled_wake_runs")}</h2>
+    <figure><table>
+      <thead><tr><th>{t("col_label")}</th><th>{t("col_device")}</th><th>{t("col_result")}</th><th>{t("col_detail")}</th><th>{t("col_started_at")}</th><th>{t("col_finished_at")}</th></tr></thead>
+      <tbody>{runs_html}</tbody>
+    </table></figure>
+    """
+    return _layout(request, t("title_scheduled_wakes"), body, admin["username"], message=message, error=error)
+
+
+@router.get("/scheduled-wakes/new", response_class=HTMLResponse)
+def scheduled_wakes_new_page(request: Request, device_id: str | None = None):
+    admin = _require_admin_or_redirect(request)
+    if isinstance(admin, RedirectResponse):
+        return admin
+    t = lambda key, **kwargs: _tr(request, key, **kwargs)
+    devices = list_hosts()
+    message, error = _msg(request)
+    default_days = list(DAY_ORDER[:5])
+    values = {
+        "device_id": (device_id or "").strip(),
+        "label": "",
+        "enabled": True,
+        "timezone": "UTC",
+        "days_of_week": default_days,
+        "local_time": "07:30",
+    }
+    body = _scheduled_wake_form_body(
+        request,
+        title=t("heading_create_scheduled_wake"),
+        action_path="/admin/ui/scheduled-wakes/create",
+        submit_label=t("action_create_schedule"),
+        devices=[dict(row) for row in devices],
+        values=values,
+        return_to=_schedule_filter_path(request, device_id=(device_id or "").strip() or None),
+    )
+    return _layout(request, t("title_new_scheduled_wake"), body, admin["username"], message=message, error=error)
+
+
+@router.post("/scheduled-wakes/create")
+def scheduled_wakes_create(
+    request: Request,
+    device_id: str = Form(""),
+    label: str = Form(""),
+    enabled: str = Form(""),
+    timezone: str = Form(""),
+    days_of_week: list[str] = Form([]),
+    local_time: str = Form(""),
+    return_to: str = Form("/admin/ui/scheduled-wakes"),
+):
+    admin = _require_admin_or_redirect(request)
+    if isinstance(admin, RedirectResponse):
+        return admin
+    t = lambda key, **kwargs: _tr(request, key, **kwargs)
+    safe_return_to = _safe_next_path(return_to)
+    try:
+        resolved = _resolve_scheduled_wake_form_values(
+            request,
+            device_id=device_id,
+            label=label,
+            enabled=_form_checkbox(enabled),
+            timezone_name=timezone,
+            days_of_week=days_of_week,
+            local_time=local_time,
+        )
+    except ValueError as exc:
+        return _redirect(_schedule_form_path(request, device_id=device_id.strip() or None), error=str(exc), request=request)
+
+    row = create_scheduled_wake_job(
+        device_id=str(resolved["device_id"]),
+        created_by_user_id=int(admin["id"]),
+        label=str(resolved["label"]),
+        enabled=bool(resolved["enabled"]),
+        timezone=str(resolved["timezone"]),
+        days_of_week=[str(day) for day in resolved["days_of_week"]],
+        local_time=str(resolved["local_time"]),
+        next_run_at=str(resolved["next_run_at"]) if resolved["next_run_at"] is not None else None,
+    )
+    log_admin_action(
+        actor_username=admin["username"],
+        action="ui_create_scheduled_wake",
+        target_type="scheduled_wake_job",
+        target_id=str(row["id"]),
+        detail=json.dumps(
+            {
+                "device_id": resolved["device_id"],
+                "enabled": resolved["enabled"],
+                "timezone": resolved["timezone"],
+                "days_of_week": resolved["days_of_week"],
+                "local_time": resolved["local_time"],
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
+    )
+    return _redirect(safe_return_to, message=t("msg_schedule_created", label=str(row["label"])), request=request)
+
+
+@router.get("/scheduled-wakes/{job_id}/edit", response_class=HTMLResponse)
+def scheduled_wakes_edit_page(request: Request, job_id: str):
+    admin = _require_admin_or_redirect(request)
+    if isinstance(admin, RedirectResponse):
+        return admin
+    t = lambda key, **kwargs: _tr(request, key, **kwargs)
+    job = get_scheduled_wake_job(job_id)
+    if not job:
+        return _redirect("/admin/ui/scheduled-wakes", error=t("error_schedule_not_found"), request=request)
+    devices = list_hosts()
+    message, error = _msg(request)
+    values = {
+        "device_id": job["device_id"],
+        "label": job["label"],
+        "enabled": bool(job["enabled"]),
+        "timezone": job["timezone"],
+        "days_of_week": parse_days_of_week_json(str(job["days_of_week_json"])),
+        "local_time": job["local_time"],
+    }
+    body = _scheduled_wake_form_body(
+        request,
+        title=t("heading_edit_scheduled_wake"),
+        action_path=f"/admin/ui/scheduled-wakes/{job_id}/update",
+        submit_label=t("action_update_schedule"),
+        devices=[dict(row) for row in devices],
+        values=values,
+        return_to=_schedule_filter_path(request, device_id=str(job["device_id"])),
+    )
+    return _layout(request, t("title_edit_scheduled_wake"), body, admin["username"], message=message, error=error)
+
+
+@router.post("/scheduled-wakes/{job_id}/update")
+def scheduled_wakes_update(
+    request: Request,
+    job_id: str,
+    device_id: str = Form(""),
+    label: str = Form(""),
+    enabled: str = Form(""),
+    timezone: str = Form(""),
+    days_of_week: list[str] = Form([]),
+    local_time: str = Form(""),
+    return_to: str = Form("/admin/ui/scheduled-wakes"),
+):
+    admin = _require_admin_or_redirect(request)
+    if isinstance(admin, RedirectResponse):
+        return admin
+    t = lambda key, **kwargs: _tr(request, key, **kwargs)
+    current = get_scheduled_wake_job(job_id)
+    if not current:
+        return _redirect("/admin/ui/scheduled-wakes", error=t("error_schedule_not_found"), request=request)
+    safe_return_to = _safe_next_path(return_to)
+    try:
+        resolved = _resolve_scheduled_wake_form_values(
+            request,
+            device_id=device_id,
+            label=label,
+            enabled=_form_checkbox(enabled),
+            timezone_name=timezone,
+            days_of_week=days_of_week,
+            local_time=local_time,
+            current_job=dict(current),
+        )
+    except ValueError as exc:
+        return _redirect(f"/admin/ui/scheduled-wakes/{job_id}/edit", error=str(exc), request=request)
+
+    row = update_scheduled_wake_job(
+        job_id,
+        {
+            "device_id": resolved["device_id"],
+            "label": resolved["label"],
+            "enabled": int(bool(resolved["enabled"])),
+            "timezone": resolved["timezone"],
+            "days_of_week": resolved["days_of_week"],
+            "local_time": resolved["local_time"],
+            "next_run_at": resolved["next_run_at"],
+        },
+    )
+    if row is None:
+        return _redirect("/admin/ui/scheduled-wakes", error=t("error_schedule_not_found"), request=request)
+    log_admin_action(
+        actor_username=admin["username"],
+        action="ui_update_scheduled_wake",
+        target_type="scheduled_wake_job",
+        target_id=job_id,
+        detail=json.dumps(
+            {
+                "device_id": resolved["device_id"],
+                "enabled": resolved["enabled"],
+                "timezone": resolved["timezone"],
+                "days_of_week": resolved["days_of_week"],
+                "local_time": resolved["local_time"],
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
+    )
+    return _redirect(safe_return_to, message=t("msg_schedule_updated", label=str(row["label"])), request=request)
+
+
+@router.post("/scheduled-wakes/{job_id}/toggle")
+def scheduled_wakes_toggle(
+    request: Request,
+    job_id: str,
+    return_to: str = Form("/admin/ui/scheduled-wakes"),
+):
+    admin = _require_admin_or_redirect(request)
+    if isinstance(admin, RedirectResponse):
+        return admin
+    t = lambda key, **kwargs: _tr(request, key, **kwargs)
+    current = get_scheduled_wake_job(job_id)
+    if not current:
+        return _redirect("/admin/ui/scheduled-wakes", error=t("error_schedule_not_found"), request=request)
+    next_enabled = not bool(current["enabled"])
+    resolved = _resolve_scheduled_wake_form_values(
+        request,
+        device_id=str(current["device_id"]),
+        label=str(current["label"]),
+        enabled=next_enabled,
+        timezone_name=str(current["timezone"]),
+        days_of_week=parse_days_of_week_json(str(current["days_of_week_json"])),
+        local_time=str(current["local_time"]),
+        current_job=dict(current),
+    )
+    row = update_scheduled_wake_job(
+        job_id,
+        {
+            "enabled": int(next_enabled),
+            "next_run_at": resolved["next_run_at"],
+        },
+    )
+    if row is None:
+        return _redirect("/admin/ui/scheduled-wakes", error=t("error_schedule_not_found"), request=request)
+    log_admin_action(
+        actor_username=admin["username"],
+        action="ui_update_scheduled_wake",
+        target_type="scheduled_wake_job",
+        target_id=job_id,
+        detail=json.dumps({"enabled": next_enabled}, sort_keys=True, separators=(",", ":")),
+    )
+    message_key = "msg_schedule_enabled" if next_enabled else "msg_schedule_disabled"
+    return _redirect(_safe_next_path(return_to), message=t(message_key, label=str(row["label"])), request=request)
+
+
+@router.post("/scheduled-wakes/{job_id}/delete")
+def scheduled_wakes_delete(
+    request: Request,
+    job_id: str,
+    return_to: str = Form("/admin/ui/scheduled-wakes"),
+):
+    admin = _require_admin_or_redirect(request)
+    if isinstance(admin, RedirectResponse):
+        return admin
+    t = lambda key, **kwargs: _tr(request, key, **kwargs)
+    current = get_scheduled_wake_job(job_id)
+    if not current:
+        return _redirect("/admin/ui/scheduled-wakes", error=t("error_schedule_not_found"), request=request)
+    if not delete_scheduled_wake_job(job_id):
+        return _redirect("/admin/ui/scheduled-wakes", error=t("error_schedule_not_found"), request=request)
+    log_admin_action(
+        actor_username=admin["username"],
+        action="ui_delete_scheduled_wake",
+        target_type="scheduled_wake_job",
+        target_id=job_id,
+        detail=json.dumps(
+            {"device_id": current["device_id"], "label": current["label"]},
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
+    )
+    return _redirect(
+        _safe_next_path(return_to),
+        message=t("msg_schedule_deleted", label=str(current["label"])),
+        request=request,
+    )
+
+
+@router.get("/device-memberships", response_class=HTMLResponse)
+def device_memberships_page(request: Request):
     admin = _require_admin_or_redirect(request)
     if isinstance(admin, RedirectResponse):
         return admin
     t = lambda key, **kwargs: _tr(request, key, **kwargs)
     users = list_users()
     devices = list_hosts()
-    assignments = list_assignments()
+    memberships = list_device_memberships()
     message, error = _msg(request)
-    user_opts = "".join(f'<option value="{row["id"]}">{_esc(row["username"])} ({row["id"]})</option>' for row in users)
-    device_opts = "".join(f'<option value="{_esc(row["id"])}">{_esc(row["name"])} ({_esc(row["id"])})</option>' for row in devices)
+    user_opts = "".join(
+        f'<option value="{row["id"]}">{_esc(row["username"])} ({row["id"]})</option>'
+        for row in users
+    )
+    device_opts = "".join(
+        f'<option value="{_esc(row["id"])}">{_esc(row["display_name"] or row["name"])} ({_esc(row["id"])})</option>'
+        for row in devices
+    )
     rows = "".join(
         f"""
         <tr>
-          <td>{row['user_id']}</td><td>{_esc(row['username'])}</td><td>{_esc(row['device_id'])}</td><td>{_esc(row['device_name'])}</td><td>{_esc(row['created_at'])}</td>
-          <td><form method="post" action="/admin/ui/assignments/{row['user_id']}/{_esc(row['device_id'])}/delete" data-confirm="{_esc(t('confirm_remove_assignment'))}"><button type="submit" class="secondary">{t("action_remove")}</button></form></td>
+          <td>
+            <div class="stacked-cell">
+              <strong>{_esc(row['username'])}</strong>
+              <span class="muted">#{row['user_id']}</span>
+            </div>
+          </td>
+          <td>
+            <div class="stacked-cell">
+              <strong>{_esc(_device_membership_device_label(dict(row)))}</strong>
+              <span class="muted">{_esc(row['device_id'])}</span>
+            </div>
+          </td>
+          <td>{_bool_text(request, row['can_view_status'])}</td>
+          <td>{_bool_text(request, row['can_wake'])}</td>
+          <td>{_bool_text(request, row['can_request_shutdown'])}</td>
+          <td>{_bool_text(request, row['can_manage_schedule'])}</td>
+          <td>{_bool_text(request, row['is_favorite'])}</td>
+          <td>{_esc(row['sort_order'])}</td>
+          <td>{_esc(row['created_at'])}</td>
+          <td>{_esc(row['updated_at'])}</td>
+          <td>
+            <form method="post" action="/admin/ui/device-memberships/{_esc(row['id'])}/update">
+              <div class="membership-permissions">
+                <label class="checkbox-item"><input type="checkbox" name="can_view_status" value="1" {_checkbox_checked(row['can_view_status'])} /> {t("label_can_view_status")}</label>
+                <label class="checkbox-item"><input type="checkbox" name="can_wake" value="1" {_checkbox_checked(row['can_wake'])} /> {t("label_can_wake")}</label>
+                <label class="checkbox-item"><input type="checkbox" name="can_request_shutdown" value="1" {_checkbox_checked(row['can_request_shutdown'])} /> {t("label_can_request_shutdown")}</label>
+                <label class="checkbox-item"><input type="checkbox" name="can_manage_schedule" value="1" {_checkbox_checked(row['can_manage_schedule'])} /> {t("label_can_manage_schedule")}</label>
+                <label class="checkbox-item"><input type="checkbox" name="is_favorite" value="1" {_checkbox_checked(row['is_favorite'])} /> {t("label_is_favorite")}</label>
+                <label class="stacked-cell">{t("label_sort_order")}<input name="sort_order" value="{_esc(row['sort_order'])}" placeholder="{t("placeholder_sort_order")}" /></label>
+              </div>
+              <button type="submit">{t("action_save")}</button>
+            </form>
+          </td>
+          <td>
+            <form method="post" action="/admin/ui/device-memberships/{_esc(row['id'])}/delete" data-confirm="{_esc(t('confirm_remove_device_access', username=str(row['username']), device=_device_membership_device_label(dict(row))))}">
+              <button type="submit" class="secondary">{t("action_remove")}</button>
+            </form>
+          </td>
         </tr>
         """
-        for row in assignments
+        for row in memberships
     )
     body = f"""
-    <h2>{t("heading_create_assignment")}</h2>
-    <form method="post" action="/admin/ui/assignments/create" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:1.5rem;">
-      <select name="user_id">{user_opts}</select>
-      <select name="device_id">{device_opts}</select>
-      <button type="submit">{t("action_assign")}</button>
+    <h2>{t("heading_grant_device_access")}</h2>
+    <form method="post" action="/admin/ui/device-memberships/create" class="membership-create-form">
+      <label class="stacked-cell">{t("col_user")}<select name="user_id">{user_opts}</select></label>
+      <label class="stacked-cell">{t("col_device")}<select name="device_id">{device_opts}</select></label>
+      <div class="checkbox-group" style="grid-column:1 / -1;">
+        <label class="checkbox-item"><input type="checkbox" name="can_view_status" value="1" checked /> {t("label_can_view_status")}</label>
+        <label class="checkbox-item"><input type="checkbox" name="can_wake" value="1" checked /> {t("label_can_wake")}</label>
+        <label class="checkbox-item"><input type="checkbox" name="can_request_shutdown" value="1" checked /> {t("label_can_request_shutdown")}</label>
+        <label class="checkbox-item"><input type="checkbox" name="can_manage_schedule" value="1" /> {t("label_can_manage_schedule")}</label>
+        <label class="checkbox-item"><input type="checkbox" name="is_favorite" value="1" /> {t("label_is_favorite")}</label>
+      </div>
+      <label class="stacked-cell">{t("label_sort_order")}<input name="sort_order" value="0" placeholder="{t("placeholder_sort_order")}" /></label>
+      <div style="display:flex;align-items:end;">
+        <button type="submit">{t("action_grant_access")}</button>
+      </div>
     </form>
-    <h2>{t("heading_assignments")}</h2>
-    <figure><table>
-      <thead><tr><th>{t("col_user_id")}</th><th>{t("col_username")}</th><th>{t("col_device_id")}</th><th>{t("col_device")}</th><th>{t("col_created")}</th><th>{t("col_action")}</th></tr></thead>
+    <h2>{t("heading_device_access")}</h2>
+    <figure><table class="membership-table">
+      <thead>
+        <tr>
+          <th>{t("col_user")}</th>
+          <th>{t("col_device")}</th>
+          <th>{t("col_view_status")}</th>
+          <th>{t("col_wake")}</th>
+          <th>{t("col_request_shutdown")}</th>
+          <th>{t("col_manage_schedule")}</th>
+          <th>{t("col_favorite")}</th>
+          <th>{t("col_sort_order")}</th>
+          <th>{t("col_created")}</th>
+          <th>{t("col_updated")}</th>
+          <th>{t("col_update")}</th>
+          <th>{t("col_delete")}</th>
+        </tr>
+      </thead>
       <tbody>{rows}</tbody>
     </table></figure>
     """
-    return _layout(request, t("title_assignments"), body, admin["username"], message=message, error=error)
+    return _layout(request, t("title_device_access"), body, admin["username"], message=message, error=error)
 
 
-@router.post("/assignments/create")
-def assignments_create(request: Request, user_id: int = Form(...), device_id: str = Form(...)):
+@router.post("/device-memberships/create")
+def device_memberships_create(
+    request: Request,
+    user_id: int = Form(...),
+    device_id: str = Form(...),
+    can_view_status: str = Form(""),
+    can_wake: str = Form(""),
+    can_request_shutdown: str = Form(""),
+    can_manage_schedule: str = Form(""),
+    is_favorite: str = Form(""),
+    sort_order: str = Form("0"),
+):
     admin = _require_admin_or_redirect(request)
     if isinstance(admin, RedirectResponse):
         return admin
     t = lambda key, **kwargs: _tr(request, key, **kwargs)
     if not get_user_by_id(user_id):
-        return _redirect("/admin/ui/assignments", error=t("error_user_not_found"), request=request)
-    if not get_host_by_id(device_id):
-        return _redirect("/admin/ui/assignments", error=t("error_device_not_found"), request=request)
-    assign_device_to_user(user_id, device_id)
+        return _redirect("/admin/ui/device-memberships", error=t("error_user_not_found"), request=request)
+    device = get_host_by_id(device_id)
+    if not device:
+        return _redirect("/admin/ui/device-memberships", error=t("error_device_not_found"), request=request)
+    try:
+        sort_order_value = int(sort_order.strip() or "0")
+    except ValueError:
+        return _redirect("/admin/ui/device-memberships", error=t("error_sort_order_integer"), request=request)
+    existing = get_device_membership_for_user_device(user_id, device_id)
+    if existing:
+        updated_existing = update_device_membership(
+            str(existing["id"]),
+            {
+                "can_view_status": int(_form_checkbox(can_view_status)),
+                "can_wake": int(_form_checkbox(can_wake)),
+                "can_request_shutdown": int(_form_checkbox(can_request_shutdown)),
+                "can_manage_schedule": int(_form_checkbox(can_manage_schedule)),
+                "is_favorite": int(_form_checkbox(is_favorite)),
+                "sort_order": sort_order_value,
+            },
+        )
+        resolved = updated_existing or existing
+        username = str(resolved["username"])
+        device_label = _device_membership_device_label(dict(resolved))
+        log_admin_action(
+            actor_username=admin["username"],
+            action="ui_update_device_membership",
+            target_type="device_membership",
+            target_id=str(resolved["id"]),
+            detail=(
+                f"user={username} device={device_label} "
+                f"view={int(bool(resolved['can_view_status']))} "
+                f"wake={int(bool(resolved['can_wake']))} "
+                f"shutdown={int(bool(resolved['can_request_shutdown']))} "
+                f"schedule={int(bool(resolved['can_manage_schedule']))} "
+                f"favorite={int(bool(resolved['is_favorite']))} "
+                f"sort_order={resolved['sort_order']}"
+            ),
+        )
+        return _redirect(
+            "/admin/ui/device-memberships",
+            message=t(
+                "msg_membership_updated",
+                username=username,
+                device=device_label,
+            ),
+            request=request,
+        )
+    membership = create_device_membership(
+        user_id=user_id,
+        device_id=device_id,
+        can_view_status=_form_checkbox(can_view_status),
+        can_wake=_form_checkbox(can_wake),
+        can_request_shutdown=_form_checkbox(can_request_shutdown),
+        can_manage_schedule=_form_checkbox(can_manage_schedule),
+        is_favorite=_form_checkbox(is_favorite),
+        sort_order=sort_order_value,
+    )
+    username = str(membership["username"])
+    device_label = _device_membership_device_label(dict(membership))
     log_admin_action(
         actor_username=admin["username"],
-        action="ui_create_assignment",
-        target_type="assignment",
-        target_id=f"{user_id}:{device_id}",
-        detail=None,
+        action="ui_create_device_membership",
+        target_type="device_membership",
+        target_id=str(membership["id"]),
+        detail=(
+            f"user={username} device={device_label} "
+            f"view={int(bool(membership['can_view_status']))} "
+            f"wake={int(bool(membership['can_wake']))} "
+            f"shutdown={int(bool(membership['can_request_shutdown']))} "
+            f"schedule={int(bool(membership['can_manage_schedule']))} "
+            f"favorite={int(bool(membership['is_favorite']))} "
+            f"sort_order={membership['sort_order']}"
+        ),
     )
-    return _redirect("/admin/ui/assignments", message=t("msg_assignment_saved"), request=request)
+    return _redirect(
+        "/admin/ui/device-memberships",
+        message=t("msg_membership_created", username=username, device=device_label),
+        request=request,
+    )
 
 
-@router.post("/assignments/{user_id}/{device_id}/delete")
-def assignments_delete(request: Request, user_id: int, device_id: str):
+@router.post("/device-memberships/{membership_id}/update")
+def device_memberships_update(
+    request: Request,
+    membership_id: str,
+    can_view_status: str = Form(""),
+    can_wake: str = Form(""),
+    can_request_shutdown: str = Form(""),
+    can_manage_schedule: str = Form(""),
+    is_favorite: str = Form(""),
+    sort_order: str = Form("0"),
+):
     admin = _require_admin_or_redirect(request)
     if isinstance(admin, RedirectResponse):
         return admin
     t = lambda key, **kwargs: _tr(request, key, **kwargs)
-    if not remove_assignment(user_id, device_id):
-        return _redirect("/admin/ui/assignments", error=t("error_assignment_not_found"), request=request)
+    membership = get_device_membership_by_id(membership_id)
+    if not membership:
+        return _redirect("/admin/ui/device-memberships", error=t("error_device_access_not_found"), request=request)
+    try:
+        sort_order_value = int(sort_order.strip() or "0")
+    except ValueError:
+        return _redirect("/admin/ui/device-memberships", error=t("error_sort_order_integer"), request=request)
+    updated = update_device_membership(
+        membership_id,
+        {
+            "can_view_status": int(_form_checkbox(can_view_status)),
+            "can_wake": int(_form_checkbox(can_wake)),
+            "can_request_shutdown": int(_form_checkbox(can_request_shutdown)),
+            "can_manage_schedule": int(_form_checkbox(can_manage_schedule)),
+            "is_favorite": int(_form_checkbox(is_favorite)),
+            "sort_order": sort_order_value,
+        },
+    )
+    if not updated:
+        return _redirect("/admin/ui/device-memberships", error=t("error_device_access_not_found"), request=request)
+    username = str(updated["username"])
+    device_label = _device_membership_device_label(dict(updated))
     log_admin_action(
         actor_username=admin["username"],
-        action="ui_delete_assignment",
-        target_type="assignment",
-        target_id=f"{user_id}:{device_id}",
-        detail=None,
+        action="ui_update_device_membership",
+        target_type="device_membership",
+        target_id=str(updated["id"]),
+        detail=(
+            f"user={username} device={device_label} "
+            f"view={int(bool(updated['can_view_status']))} "
+            f"wake={int(bool(updated['can_wake']))} "
+            f"shutdown={int(bool(updated['can_request_shutdown']))} "
+            f"schedule={int(bool(updated['can_manage_schedule']))} "
+            f"favorite={int(bool(updated['is_favorite']))} "
+            f"sort_order={updated['sort_order']}"
+        ),
     )
-    return _redirect("/admin/ui/assignments", message=t("msg_assignment_removed"), request=request)
+    return _redirect(
+        "/admin/ui/device-memberships",
+        message=t("msg_membership_updated", username=username, device=device_label),
+        request=request,
+    )
+
+
+@router.post("/device-memberships/{membership_id}/delete")
+def device_memberships_delete(request: Request, membership_id: str):
+    admin = _require_admin_or_redirect(request)
+    if isinstance(admin, RedirectResponse):
+        return admin
+    t = lambda key, **kwargs: _tr(request, key, **kwargs)
+    membership = get_device_membership_by_id(membership_id)
+    if not membership or not delete_device_membership(str(membership["id"])):
+        return _redirect("/admin/ui/device-memberships", error=t("error_device_access_not_found"), request=request)
+    username = str(membership["username"])
+    device_label = _device_membership_device_label(dict(membership))
+    log_admin_action(
+        actor_username=admin["username"],
+        action="ui_delete_device_membership",
+        target_type="device_membership",
+        target_id=str(membership["id"]),
+        detail=f"user={username} device={device_label}",
+    )
+    return _redirect(
+        "/admin/ui/device-memberships",
+        message=t("msg_membership_deleted", username=username, device=device_label),
+        request=request,
+    )
 
 
 @router.get("/invites", response_class=HTMLResponse)

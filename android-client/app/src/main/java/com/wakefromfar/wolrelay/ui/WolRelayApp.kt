@@ -39,9 +39,11 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.outlined.StarOutline
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -101,6 +103,11 @@ import com.wakefromfar.wolrelay.data.ActivityEventDto
 import com.wakefromfar.wolrelay.data.MyDeviceDto
 import com.wakefromfar.wolrelay.data.ThemeMode
 import com.wakefromfar.wolrelay.ui.theme.MonoTextStyle
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.time.format.FormatStyle
+import java.util.Locale
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
 
@@ -245,6 +252,7 @@ fun WolRelayApp(
                 selectedTab = adminHomeTab,
                 onSelectedTabChange = { adminHomeTab = it },
                 devices = state.devices,
+                deviceSections = state.deviceSections,
                 activityEvents = state.activityEvents,
                 hasProAccess = state.hasProAccess,
                 freeDeviceLimit = state.freeDeviceLimit,
@@ -256,6 +264,7 @@ fun WolRelayApp(
                 isLoadingActivityMore = state.isActivityLoadingMore,
                 canLoadMoreActivity = state.activityHasMore,
                 onWake = vm::wakeDevice,
+                onToggleFavorite = vm::toggleFavorite,
                 onRequestShutdown = vm::requestShutdownPoke,
                 onRefreshDevices = vm::refreshDevices,
                 onRefreshActivity = { vm.refreshActivityEvents() },
@@ -269,6 +278,7 @@ fun WolRelayApp(
 
             state.isAuthenticated -> DeviceListScreen(
                 devices = state.devices,
+                deviceSections = state.deviceSections,
                 hasProAccess = state.hasProAccess,
                 freeDeviceLimit = state.freeDeviceLimit,
                 hiddenFreeDevices = state.hiddenFreeDevices,
@@ -276,6 +286,7 @@ fun WolRelayApp(
                 isPurchaseInProgress = state.isPurchaseInProgress,
                 isLoading = state.isLoading,
                 onWake = vm::wakeDevice,
+                onToggleFavorite = vm::toggleFavorite,
                 onRequestShutdown = vm::requestShutdownPoke,
                 onRefresh = vm::refreshDevices,
                 onUpgradeToPro = { hostActivity?.let(vm::startProPurchase) },
@@ -955,6 +966,7 @@ private fun AdminHomeScreen(
     selectedTab: AdminHomeTab,
     onSelectedTabChange: (AdminHomeTab) -> Unit,
     devices: List<MyDeviceDto>,
+    deviceSections: List<DeviceSectionUiModel>,
     activityEvents: List<ActivityEventDto>,
     hasProAccess: Boolean,
     freeDeviceLimit: Int,
@@ -965,8 +977,9 @@ private fun AdminHomeScreen(
     isLoadingActivity: Boolean,
     isLoadingActivityMore: Boolean,
     canLoadMoreActivity: Boolean,
-    onWake: (String) -> Unit,
-    onRequestShutdown: (String, String?) -> Unit,
+    onWake: (MyDeviceDto) -> Unit,
+    onToggleFavorite: (MyDeviceDto) -> Unit,
+    onRequestShutdown: (MyDeviceDto, String?) -> Unit,
     onRefreshDevices: () -> Unit,
     onRefreshActivity: () -> Unit,
     onLoadMoreActivity: () -> Unit,
@@ -993,6 +1006,7 @@ private fun AdminHomeScreen(
         when (selectedTab) {
             AdminHomeTab.DEVICES -> DeviceListScreen(
                 devices = devices,
+                deviceSections = deviceSections,
                 hasProAccess = hasProAccess,
                 freeDeviceLimit = freeDeviceLimit,
                 hiddenFreeDevices = hiddenFreeDevices,
@@ -1000,6 +1014,7 @@ private fun AdminHomeScreen(
                 isPurchaseInProgress = isPurchaseInProgress,
                 isLoading = isLoadingDevices,
                 onWake = onWake,
+                onToggleFavorite = onToggleFavorite,
                 onRequestShutdown = onRequestShutdown,
                 onRefresh = onRefreshDevices,
                 onUpgradeToPro = onUpgradeToPro,
@@ -1301,21 +1316,23 @@ private fun ActivityEventCard(
 @Composable
 private fun DeviceListScreen(
     devices: List<MyDeviceDto>,
+    deviceSections: List<DeviceSectionUiModel>,
     hasProAccess: Boolean,
     freeDeviceLimit: Int,
     hiddenFreeDevices: Int,
     canPurchasePro: Boolean,
     isPurchaseInProgress: Boolean,
     isLoading: Boolean,
-    onWake: (String) -> Unit,
-    onRequestShutdown: (String, String?) -> Unit,
+    onWake: (MyDeviceDto) -> Unit,
+    onToggleFavorite: (MyDeviceDto) -> Unit,
+    onRequestShutdown: (MyDeviceDto, String?) -> Unit,
     onRefresh: () -> Unit,
     onUpgradeToPro: () -> Unit,
     onRestorePurchases: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var showWakeDelayDialog by remember { mutableStateOf(false) }
-    var shutdownRequestDeviceId by remember { mutableStateOf<String?>(null) }
+    var shutdownRequestDevice by remember { mutableStateOf<MyDeviceDto?>(null) }
     var shutdownRequestMessage by remember { mutableStateOf("") }
 
     if (showWakeDelayDialog) {
@@ -1331,10 +1348,10 @@ private fun DeviceListScreen(
         )
     }
 
-    if (!shutdownRequestDeviceId.isNullOrBlank()) {
+    shutdownRequestDevice?.let { device ->
         AlertDialog(
             onDismissRequest = {
-                shutdownRequestDeviceId = null
+                shutdownRequestDevice = null
                 shutdownRequestMessage = ""
             },
             title = { Text(text = stringResource(R.string.dialog_title_request_shutdown)) },
@@ -1354,11 +1371,8 @@ private fun DeviceListScreen(
             confirmButton = {
                 TextButton(
                     onClick = {
-                        val target = shutdownRequestDeviceId
-                        if (!target.isNullOrBlank()) {
-                            onRequestShutdown(target, shutdownRequestMessage.trim().ifBlank { null })
-                        }
-                        shutdownRequestDeviceId = null
+                        onRequestShutdown(device, shutdownRequestMessage.trim().ifBlank { null })
+                        shutdownRequestDevice = null
                         shutdownRequestMessage = ""
                     },
                 ) {
@@ -1368,7 +1382,7 @@ private fun DeviceListScreen(
             dismissButton = {
                 TextButton(
                     onClick = {
-                        shutdownRequestDeviceId = null
+                        shutdownRequestDevice = null
                         shutdownRequestMessage = ""
                     },
                 ) {
@@ -1403,7 +1417,7 @@ private fun DeviceListScreen(
                         modifier = Modifier.size(64.dp),
                     )
                     Text(
-                        text = stringResource(R.string.text_no_assigned_devices),
+                        text = stringResource(R.string.text_no_devices_available),
                         style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -1432,22 +1446,39 @@ private fun DeviceListScreen(
                         )
                     }
                 }
-                items(devices, key = { it.id }) { device ->
-                    DeviceCard(
-                        device = device,
-                        onWake = { deviceId ->
-                            onWake(deviceId)
-                            showWakeDelayDialog = true
-                        },
-                        onRequestShutdown = { deviceId ->
-                            shutdownRequestDeviceId = deviceId
-                            shutdownRequestMessage = ""
-                        },
-                    )
+                deviceSections.forEach { section ->
+                    item(key = "section-${section.key}") {
+                        DeviceSectionHeader(title = section.title)
+                    }
+                    items(section.devices, key = { it.id }) { device ->
+                        DeviceCard(
+                            device = device,
+                            isBusy = isLoading,
+                            onToggleFavorite = { onToggleFavorite(device) },
+                            onWake = {
+                                onWake(device)
+                                showWakeDelayDialog = true
+                            },
+                            onRequestShutdown = {
+                                shutdownRequestDevice = device
+                                shutdownRequestMessage = ""
+                            },
+                        )
+                    }
                 }
             }
         }
     }
+}
+
+@Composable
+private fun DeviceSectionHeader(title: String) {
+    Text(
+        text = title,
+        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(top = 8.dp, bottom = 2.dp),
+    )
 }
 
 @Composable
@@ -1521,6 +1552,7 @@ private fun StatusBadge(stateKey: String) {
     val (dotColor, labelRes, labelColor) = when (stateKey) {
         "on" -> Triple(Color(0xFF22C55E), R.string.state_on, Color(0xFF22C55E))
         "off" -> Triple(colorScheme.error, R.string.state_off, colorScheme.error)
+        "restricted" -> Triple(colorScheme.onSurfaceVariant, R.string.state_unavailable, colorScheme.onSurfaceVariant)
         else -> Triple(colorScheme.onSurfaceVariant, R.string.state_unknown, colorScheme.onSurfaceVariant)
     }
 
@@ -1545,13 +1577,17 @@ private fun StatusBadge(stateKey: String) {
 @OptIn(ExperimentalLayoutApi::class)
 private fun DeviceCard(
     device: MyDeviceDto,
-    onWake: (String) -> Unit,
-    onRequestShutdown: (String) -> Unit,
+    isBusy: Boolean,
+    onToggleFavorite: () -> Unit,
+    onWake: () -> Unit,
+    onRequestShutdown: () -> Unit,
 ) {
+    val context = LocalContext.current
     val colorScheme = MaterialTheme.colorScheme
-    val stateKey = device.last_power_state.lowercase()
+    val stateKey = if (device.canViewStatus) device.last_power_state.lowercase() else "restricted"
     val isPoweredOn = stateKey == "on"
     val poweredOnColor = Color(0xFF22C55E)
+    val scheduleHint = formatScheduledWakeHint(device, context)
 
     val (stateContainerColor, stateIconColor) = when (stateKey) {
         "on" -> poweredOnColor.copy(alpha = 0.14f) to poweredOnColor
@@ -1616,6 +1652,26 @@ private fun DeviceCard(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
+                    IconButton(
+                        onClick = onToggleFavorite,
+                        enabled = !isBusy,
+                    ) {
+                        Icon(
+                            imageVector = if (device.is_favorite) Icons.Filled.Star else Icons.Outlined.StarOutline,
+                            contentDescription = stringResource(
+                                if (device.is_favorite) {
+                                    R.string.action_unfavorite
+                                } else {
+                                    R.string.action_favorite
+                                },
+                            ),
+                            tint = if (device.is_favorite) {
+                                colorScheme.tertiary
+                            } else {
+                                colorScheme.onSurfaceVariant
+                            },
+                        )
+                    }
                     Spacer(modifier = Modifier.width(8.dp))
                     StatusBadge(stateKey = stateKey)
                 }
@@ -1634,16 +1690,28 @@ private fun DeviceCard(
                     color = colorScheme.onSurfaceVariant,
                 )
 
+                if (!scheduleHint.isNullOrBlank()) {
+                    Text(
+                        text = scheduleHint,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = colorScheme.primary,
+                    )
+                }
+
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
                     Text(
-                        text = stringResource(R.string.label_last_checked, lastCheckedAt, staleSuffix),
+                        text = if (device.canViewStatus) {
+                            stringResource(R.string.label_last_checked, lastCheckedAt, staleSuffix)
+                        } else {
+                            stringResource(R.string.text_status_unavailable)
+                        },
                         style = MaterialTheme.typography.bodySmall,
                         color = colorScheme.onSurfaceVariant,
                     )
-                    if (device.is_stale) {
+                    if (device.canViewStatus && device.is_stale) {
                         Icon(
                             imageVector = Icons.Default.Warning,
                             contentDescription = stringResource(R.string.content_desc_stale_status),
@@ -1663,7 +1731,8 @@ private fun DeviceCard(
                         maxItemsInEachRow = if (useStackedActions) 1 else 2,
                     ) {
                         TextButton(
-                            onClick = { onRequestShutdown(device.id) },
+                            onClick = onRequestShutdown,
+                            enabled = device.canRequestShutdown,
                             modifier = if (useStackedActions) Modifier.fillMaxWidth() else Modifier,
                         ) {
                             Text(
@@ -1674,7 +1743,8 @@ private fun DeviceCard(
                             )
                         }
                         FilledTonalButton(
-                            onClick = { onWake(device.id) },
+                            onClick = onWake,
+                            enabled = device.canWake,
                             modifier = if (useStackedActions) Modifier.fillMaxWidth() else Modifier.widthIn(min = 96.dp),
                             colors = ButtonDefaults.filledTonalButtonColors(
                                 containerColor = colorScheme.tertiaryContainer,
@@ -1691,9 +1761,68 @@ private fun DeviceCard(
                         }
                     }
                 }
+
+                DevicePermissionHints(device = device)
             }
         }
     }
+}
+
+private fun formatScheduledWakeHint(device: MyDeviceDto, context: Context): String? {
+    val summary = device.scheduled_wake_summary ?: return null
+    val enabledCount = summary.enabled_count
+    if (!summary.next_run_at.isNullOrBlank() && enabledCount > 0) {
+        val formatted = try {
+            val formatter = DateTimeFormatter.ofLocalizedDateTime(FormatStyle.SHORT)
+                .withLocale(Locale.getDefault())
+                .withZone(ZoneId.systemDefault())
+            formatter.format(Instant.parse(summary.next_run_at))
+        } catch (_: Exception) {
+            summary.next_run_at
+        }
+        return context.getString(R.string.text_schedule_next_wake, formatted)
+    }
+    if (enabledCount > 0) {
+        return if (enabledCount == 1) {
+            context.getString(R.string.text_schedule_active_one)
+        } else {
+            context.getString(R.string.text_schedule_active_many, enabledCount)
+        }
+    }
+    val totalCount = summary.total_count
+    if (totalCount > 0) {
+        return if (totalCount == 1) {
+            context.getString(R.string.text_schedule_disabled_one)
+        } else {
+            context.getString(R.string.text_schedule_disabled_many, totalCount)
+        }
+    }
+    return null
+}
+
+@Composable
+private fun DevicePermissionHints(device: MyDeviceDto) {
+    val hints = buildList {
+        if (!device.canViewStatus) {
+            add(stringResource(R.string.text_status_unavailable))
+        }
+        if (!device.canWake) {
+            add(stringResource(R.string.text_wake_unavailable))
+        }
+        if (!device.canRequestShutdown) {
+            add(stringResource(R.string.text_shutdown_unavailable))
+        }
+    }
+
+    if (hints.isEmpty()) {
+        return
+    }
+
+    Text(
+        text = hints.joinToString(separator = " • "),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
 }
 
 private tailrec fun Context.findActivity(): Activity? = when (this) {

@@ -2,13 +2,15 @@ from __future__ import annotations
 
 from app.power import PowerCheckResult
 
-from .conftest import auth_headers, login
+from .conftest import auth_headers, create_device_membership, login
 
 
 def test_new_endpoints_smoke(client, monkeypatch):
     health_res = client.get("/health")
     assert health_res.status_code == 200
     assert health_res.json() == {"ok": "true"}
+    assert client.get("/hosts").status_code == 404
+    assert client.get("/admin/hosts").status_code == 404
 
     admin_token = login(client, "admin", "adminpass123456")
     admin_h = auth_headers(admin_token)
@@ -46,16 +48,11 @@ def test_new_endpoints_smoke(client, monkeypatch):
     assert devices_res.status_code == 200, devices_res.text
     assert any(row["id"] == device_id and row["source_ip"] == "10.0.0.2" for row in devices_res.json())
 
-    assign_res = client.post(
-        "/admin/assignments",
-        headers=admin_h,
-        json={"user_id": user_id, "device_id": device_id},
-    )
-    assert assign_res.status_code == 201, assign_res.text
+    membership = create_device_membership(client, admin_h, user_id=user_id, device_id=device_id)
 
-    assignments_res = client.get("/admin/assignments", headers=admin_h)
-    assert assignments_res.status_code == 200, assignments_res.text
-    assert any(row["user_id"] == user_id and row["device_id"] == device_id for row in assignments_res.json())
+    memberships_res = client.get("/admin/device-memberships", headers=admin_h)
+    assert memberships_res.status_code == 200, memberships_res.text
+    assert any(row["id"] == membership["id"] and row["device_id"] == device_id for row in memberships_res.json())
 
     invite_res = client.post(
         "/admin/invites",
@@ -77,6 +74,12 @@ def test_new_endpoints_smoke(client, monkeypatch):
     assert me_devices_res.status_code == 200, me_devices_res.text
     assert len(me_devices_res.json()) == 1
     assert me_devices_res.json()[0]["id"] == device_id
+    assert me_devices_res.json()[0]["permissions"] == {
+        "can_view_status": True,
+        "can_wake": True,
+        "can_request_shutdown": True,
+        "can_manage_schedule": False,
+    }
 
     monkeypatch.setattr(
         "app.main.run_power_check",

@@ -13,6 +13,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 class ApiClient {
     private val json = Json {
         ignoreUnknownKeys = true
+        explicitNulls = false
     }
 
     private val client = OkHttpClient.Builder().build()
@@ -27,7 +28,7 @@ class ApiClient {
         client.newCall(request).execute().use { response ->
             val responseBody = response.body?.string().orEmpty()
             if (!response.isSuccessful) {
-                throw ApiException("Login failed (${response.code})")
+                throw ApiException("Login failed (${response.code})", statusCode = response.code)
             }
             json.decodeFromString<LoginResponse>(responseBody)
         }
@@ -44,7 +45,10 @@ class ApiClient {
             client.newCall(request).execute().use { response ->
                 val responseBody = response.body?.string().orEmpty()
                 if (!response.isSuccessful) {
-                    throw ApiException(errorFromResponse("Claim failed", response.code, responseBody))
+                    throw ApiException(
+                        errorFromResponse("Claim failed", response.code, responseBody),
+                        statusCode = response.code,
+                    )
                 }
                 json.decodeFromString<OnboardingClaimResponse>(responseBody)
             }
@@ -60,7 +64,10 @@ class ApiClient {
         client.newCall(request).execute().use { response ->
             val responseBody = response.body?.string().orEmpty()
             if (!response.isSuccessful) {
-                throw ApiException(errorFromResponse("Loading devices failed", response.code, responseBody))
+                throw ApiException(
+                    errorFromResponse("Loading devices failed", response.code, responseBody),
+                    statusCode = response.code,
+                )
             }
             json.decodeFromString<List<MyDeviceDto>>(responseBody)
         }
@@ -76,9 +83,43 @@ class ApiClient {
         client.newCall(request).execute().use { response ->
             val responseBody = response.body?.string().orEmpty()
             if (!response.isSuccessful) {
-                throw ApiException(errorFromResponse("Wake failed", response.code, responseBody))
+                throw ApiException(
+                    errorFromResponse("Wake failed", response.code, responseBody),
+                    statusCode = response.code,
+                )
             }
             json.decodeFromString<MeWakeResponse>(responseBody)
+        }
+    }
+
+    suspend fun updateMyDevicePreferences(
+        baseUrl: String,
+        token: String,
+        hostId: String,
+        isFavorite: Boolean? = null,
+        sortOrder: Int? = null,
+    ): MyDeviceDto = withContext(Dispatchers.IO) {
+        val payload = json.encodeToString(
+            MyDevicePreferencesUpdateRequest(
+                is_favorite = isFavorite,
+                sort_order = sortOrder,
+            ),
+        )
+        val request = Request.Builder()
+            .url("${normalizeBaseUrl(baseUrl)}/me/devices/$hostId/preferences")
+            .addHeader("Authorization", "Bearer $token")
+            .patch(payload.toRequestBody(JSON_MEDIA_TYPE))
+            .build()
+
+        client.newCall(request).execute().use { response ->
+            val responseBody = response.body?.string().orEmpty()
+            if (!response.isSuccessful) {
+                throw ApiException(
+                    errorFromResponse("Updating device preferences failed", response.code, responseBody),
+                    statusCode = response.code,
+                )
+            }
+            json.decodeFromString<MyDeviceDto>(responseBody)
         }
     }
 
@@ -106,7 +147,10 @@ class ApiClient {
         client.newCall(request).execute().use { response ->
             val responseBody = response.body?.string().orEmpty()
             if (!response.isSuccessful) {
-                throw ApiException(errorFromResponse("Loading admin events failed", response.code, responseBody))
+                throw ApiException(
+                    errorFromResponse("Loading admin events failed", response.code, responseBody),
+                    statusCode = response.code,
+                )
             }
             json.decodeFromString<List<ActivityEventDto>>(responseBody)
         }
@@ -132,7 +176,10 @@ class ApiClient {
         client.newCall(request).execute().use { response ->
             val responseBody = response.body?.string().orEmpty()
             if (!response.isSuccessful) {
-                throw ApiException(errorFromResponse("Shutdown request failed", response.code, responseBody))
+                throw ApiException(
+                    errorFromResponse("Shutdown request failed", response.code, responseBody),
+                    statusCode = response.code,
+                )
             }
             json.decodeFromString<ShutdownPokeDto>(responseBody)
         }
@@ -152,7 +199,10 @@ class ApiClient {
         client.newCall(request).execute().use { response ->
             val responseBody = response.body?.string().orEmpty()
             if (!response.isSuccessful) {
-                throw ApiException(errorFromResponse("Marking shutdown request seen failed", response.code, responseBody))
+                throw ApiException(
+                    errorFromResponse("Marking shutdown request seen failed", response.code, responseBody),
+                    statusCode = response.code,
+                )
             }
             json.decodeFromString<ShutdownPokeDto>(responseBody)
         }
@@ -172,7 +222,10 @@ class ApiClient {
         client.newCall(request).execute().use { response ->
             val responseBody = response.body?.string().orEmpty()
             if (!response.isSuccessful) {
-                throw ApiException(errorFromResponse("Resolving shutdown request failed", response.code, responseBody))
+                throw ApiException(
+                    errorFromResponse("Resolving shutdown request failed", response.code, responseBody),
+                    statusCode = response.code,
+                )
             }
             json.decodeFromString<ShutdownPokeDto>(responseBody)
         }
@@ -190,4 +243,7 @@ class ApiClient {
     }
 }
 
-class ApiException(message: String) : RuntimeException(message)
+class ApiException(
+    message: String,
+    val statusCode: Int? = null,
+) : RuntimeException(message)

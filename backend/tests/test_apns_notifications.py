@@ -10,7 +10,7 @@ from app.db import (
     reserve_notification_device_visible_alert,
 )
 
-from .conftest import auth_headers, login
+from .conftest import auth_headers, create_device_membership, login
 
 
 def _setup_user_and_device(client, username: str = "apns-user"):
@@ -42,12 +42,7 @@ def _setup_user_and_device(client, username: str = "apns-user"):
     assert device_res.status_code == 201, device_res.text
     device_id = device_res.json()["id"]
 
-    assign_res = client.post(
-        "/admin/assignments",
-        headers=admin_h,
-        json={"user_id": user_res.json()["id"], "device_id": device_id},
-    )
-    assert assign_res.status_code == 201, assign_res.text
+    create_device_membership(client, admin_h, user_id=user_res.json()["id"], device_id=device_id)
 
     user_token = login(client, username, "apns-user-password")
     user_h = auth_headers(user_token)

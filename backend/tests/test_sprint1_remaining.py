@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from app.power import PowerCheckResult
 
-from .conftest import auth_headers, login
+from .conftest import auth_headers, create_device_membership, login
 
 
 def test_manual_user_provisioning_flow(client):
@@ -180,12 +180,7 @@ def test_me_devices_triggers_background_power_check_for_stale_entries(client, mo
     assert create_device_res.status_code == 201, create_device_res.text
     device_id = create_device_res.json()["id"]
 
-    assign_res = client.post(
-        "/admin/assignments",
-        headers=admin_h,
-        json={"user_id": dana_id, "device_id": device_id},
-    )
-    assert assign_res.status_code == 201, assign_res.text
+    create_device_membership(client, admin_h, user_id=dana_id, device_id=device_id)
 
     calls: list[tuple] = []
 

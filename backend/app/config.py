@@ -71,6 +71,9 @@ class Settings(BaseSettings):
     discovery_default_host_cap: int = Field(default=256, alias="DISCOVERY_DEFAULT_HOST_CAP")
     discovery_default_tcp_ports: str = Field(default="22,80,443,445", alias="DISCOVERY_DEFAULT_TCP_PORTS")
     discovery_run_timeout_seconds: int = Field(default=120, alias="DISCOVERY_RUN_TIMEOUT_SECONDS")
+    scheduled_wake_runner: bool = Field(default=False, alias="SCHEDULED_WAKE_RUNNER")
+    scheduled_wake_poll_seconds: float = Field(default=10.0, alias="SCHEDULED_WAKE_POLL_SECONDS")
+    scheduled_wake_max_jobs_per_poll: int = Field(default=10, alias="SCHEDULED_WAKE_MAX_JOBS_PER_POLL")
 
     @property
     def db_path(self) -> Path:

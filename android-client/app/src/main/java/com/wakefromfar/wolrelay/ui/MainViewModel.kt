@@ -33,14 +33,18 @@ import com.wakefromfar.wolrelay.data.InviteLinkParser
 import com.wakefromfar.wolrelay.data.MyDeviceDto
 import com.wakefromfar.wolrelay.data.SecurePrefs
 import com.wakefromfar.wolrelay.data.ThemeMode
-import java.security.MessageDigest
-import java.util.Locale
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import org.json.JSONArray
 import org.json.JSONObject
+
+data class DeviceSectionUiModel(
+    val key: String,
+    val title: String,
+    val devices: List<MyDeviceDto>,
+    val isFavorites: Boolean = false,
+)
 
 data class AppUiState(
     val backendUrl: String = "",
@@ -54,6 +58,7 @@ data class AppUiState(
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
     val appLanguage: AppLanguage = AppLanguage.ENGLISH,
     val devices: List<MyDeviceDto> = emptyList(),
+    val deviceSections: List<DeviceSectionUiModel> = emptyList(),
     val activityEvents: List<ActivityEventDto> = emptyList(),
     val hasProAccess: Boolean = false,
     val freeDeviceLimit: Int = FREE_DEVICE_LIMIT,
@@ -89,7 +94,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application), P
         .build()
 
     private var proProductDetails: ProductDetails? = null
-    private var allAssignedDevices: List<MyDeviceDto> = emptyList()
+    private var allVisibleDevices: List<MyDeviceDto> = emptyList()
     private var activityFeedCursor: Int? = null
     private var activityPollingJob: Job? = null
     private var isActivityRefreshInFlight = false
@@ -135,6 +140,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application), P
         return ex.message ?: tr(fallbackResId)
     }
 
+    private fun forbiddenMessageOr(
+        ex: Exception,
+        @StringRes forbiddenResId: Int,
+        @StringRes fallbackResId: Int,
+    ): String {
+        return if (ex is ApiException && ex.statusCode == 403) {
+            tr(forbiddenResId)
+        } else {
+            messageOr(fallbackResId, ex)
+        }
+    }
+
     private fun extractRoleFromToken(token: String?): String? {
         if (token.isNullOrBlank()) {
             return null
@@ -162,7 +179,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application), P
         }
         state = state.copy(backendUrl = value)
         syncAdminBackgroundPolling()
-        if (allAssignedDevices.isNotEmpty()) {
+        if (allVisibleDevices.isNotEmpty()) {
             applyDeviceEntitlement()
         }
     }
@@ -309,11 +326,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application), P
         resetActivityFeedPagination(clearEvents = true)
         prefs.clearSession()
         prefs.setLastNotifiedShutdownEventId(0)
-        allAssignedDevices = emptyList()
+        allVisibleDevices = emptyList()
         state = state.copy(
             token = null,
             userRole = null,
             devices = emptyList(),
+            deviceSections = emptyList(),
             activityEvents = emptyList(),
             hiddenFreeDevices = 0,
             isActivityLoading = false,
@@ -329,7 +347,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application), P
         state = state.copy(isLoading = true, error = null)
         viewModelScope.launch {
             try {
-                allAssignedDevices = api.listMyDevices(baseUrl = state.backendUrl, token = token)
+                allVisibleDevices = sortDevicesForPresentation(api.listMyDevices(baseUrl = state.backendUrl, token = token))
                 applyDeviceEntitlement(isLoading = false)
             } catch (ex: Exception) {
                 state = state.copy(isLoading = false, error = messageOr(R.string.error_devices_load_failed, ex))
@@ -461,12 +479,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application), P
         activityPollingJob = null
     }
 
-    fun wakeDevice(deviceId: String) {
+    fun wakeDevice(device: MyDeviceDto) {
         val token = state.token ?: return
+        if (!device.canWake) {
+            state = state.copy(error = tr(R.string.error_wake_not_permitted), info = null)
+            return
+        }
         state = state.copy(isLoading = true, error = null)
         viewModelScope.launch {
             try {
-                val res = api.wakeDevice(baseUrl = state.backendUrl, token = token, hostId = deviceId)
+                val res = api.wakeDevice(baseUrl = state.backendUrl, token = token, hostId = device.id)
                 val msg = when (res.result) {
                     "already_on" -> tr(R.string.info_wake_already_on)
                     "sent" -> tr(
@@ -486,20 +508,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application), P
                     refreshActivityEvents()
                 }
             } catch (ex: Exception) {
-                state = state.copy(isLoading = false, error = messageOr(R.string.error_wake_failed, ex))
+                state = state.copy(
+                    isLoading = false,
+                    error = forbiddenMessageOr(ex, R.string.error_wake_not_permitted, R.string.error_wake_failed),
+                )
             }
         }
     }
 
-    fun requestShutdownPoke(deviceId: String, message: String? = null) {
+    fun requestShutdownPoke(device: MyDeviceDto, message: String? = null) {
         val token = state.token ?: return
+        if (!device.canRequestShutdown) {
+            state = state.copy(error = tr(R.string.error_shutdown_not_permitted), info = null)
+            return
+        }
         state = state.copy(isLoading = true, error = null)
         viewModelScope.launch {
             try {
                 api.requestShutdownPoke(
                     baseUrl = state.backendUrl,
                     token = token,
-                    hostId = deviceId,
+                    hostId = device.id,
                     message = message,
                 )
                 state = state.copy(isLoading = false, info = tr(R.string.info_shutdown_request_sent))
@@ -507,7 +536,40 @@ class MainViewModel(application: Application) : AndroidViewModel(application), P
                     refreshActivityEvents()
                 }
             } catch (ex: Exception) {
-                state = state.copy(isLoading = false, error = messageOr(R.string.error_shutdown_request_failed, ex))
+                state = state.copy(
+                    isLoading = false,
+                    error = forbiddenMessageOr(
+                        ex,
+                        R.string.error_shutdown_not_permitted,
+                        R.string.error_shutdown_request_failed,
+                    ),
+                )
+            }
+        }
+    }
+
+    fun toggleFavorite(device: MyDeviceDto) {
+        val token = state.token ?: return
+        state = state.copy(isLoading = true, error = null, info = null)
+        viewModelScope.launch {
+            try {
+                val updatedDevice = api.updateMyDevicePreferences(
+                    baseUrl = state.backendUrl,
+                    token = token,
+                    hostId = device.id,
+                    isFavorite = !device.is_favorite,
+                )
+                allVisibleDevices = sortDevicesForPresentation(
+                    allVisibleDevices.map { existing ->
+                        if (existing.id == updatedDevice.id) updatedDevice else existing
+                    },
+                )
+                applyDeviceEntitlement(isLoading = false)
+            } catch (ex: Exception) {
+                state = state.copy(
+                    isLoading = false,
+                    error = messageOr(R.string.error_device_preferences_update_failed, ex),
+                )
             }
         }
     }
@@ -709,46 +771,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application), P
 
     private fun applyDeviceEntitlement(isLoading: Boolean = state.isLoading) {
         val visibleDevices = if (state.hasProAccess) {
-            allAssignedDevices
+            allVisibleDevices
         } else {
-            freeTierVisibleDevices(allAssignedDevices)
+            freeTierVisibleDevices(allVisibleDevices)
         }
-        val hiddenCount = (allAssignedDevices.size - visibleDevices.size).coerceAtLeast(0)
+        val hiddenCount = (allVisibleDevices.size - visibleDevices.size).coerceAtLeast(0)
         state = state.copy(
             devices = visibleDevices,
+            deviceSections = buildDeviceSections(
+                devices = visibleDevices,
+                favoritesTitle = tr(R.string.section_favorites),
+                fallbackGroupTitle = tr(R.string.section_other_devices),
+            ),
             hiddenFreeDevices = hiddenCount,
             isLoading = isLoading,
         )
     }
 
     private fun freeTierVisibleDevices(devices: List<MyDeviceDto>): List<MyDeviceDto> {
-        if (devices.isEmpty()) {
-            return emptyList()
-        }
-
-        val currentIds = devices.map { it.id }.toSet()
-        val storedOrder = getFreeTierDeviceOrder(state.backendUrl)
-        val updatedOrder = mutableListOf<String>()
-        val seen = mutableSetOf<String>()
-
-        storedOrder.forEach { id ->
-            if (id in currentIds && seen.add(id)) {
-                updatedOrder.add(id)
-            }
-        }
-
-        devices.forEach { device ->
-            if (seen.add(device.id)) {
-                updatedOrder.add(device.id)
-            }
-        }
-
-        setFreeTierDeviceOrder(state.backendUrl, updatedOrder)
-
-        val byId = devices.associateBy { it.id }
-        return updatedOrder
-            .take(FREE_DEVICE_LIMIT)
-            .mapNotNull(byId::get)
+        return devices.take(FREE_DEVICE_LIMIT)
     }
 
     private fun resetActivityFeedPagination(clearEvents: Boolean) {
@@ -787,51 +828,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application), P
         monetizationPrefs.edit().putBoolean(KEY_PRO_UNLOCKED, value).apply()
     }
 
-    private fun getFreeTierDeviceOrder(backendUrl: String): List<String> {
-        val key = freeTierDeviceOrderKey(backendUrl)
-        val raw = monetizationPrefs.getString(key, null) ?: return emptyList()
-        return try {
-            val array = JSONArray(raw)
-            buildList {
-                for (idx in 0 until array.length()) {
-                    val value = array.optString(idx).trim()
-                    if (value.isNotEmpty()) {
-                        add(value)
-                    }
-                }
-            }
-        } catch (_: Exception) {
-            emptyList()
-        }
-    }
-
-    private fun setFreeTierDeviceOrder(backendUrl: String, deviceIds: List<String>) {
-        val key = freeTierDeviceOrderKey(backendUrl)
-        val uniqueIds = deviceIds.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
-        if (uniqueIds.isEmpty()) {
-            monetizationPrefs.edit().remove(key).apply()
-            return
-        }
-        val array = JSONArray()
-        uniqueIds.forEach(array::put)
-        monetizationPrefs.edit().putString(key, array.toString()).apply()
-    }
-
-    private fun freeTierDeviceOrderKey(backendUrl: String): String {
-        val normalized = backendUrl.trim().lowercase(Locale.US)
-        val digest = MessageDigest
-            .getInstance("SHA-256")
-            .digest(normalized.toByteArray(Charsets.UTF_8))
-            .joinToString(separator = "") { byte -> "%02x".format(byte.toInt() and 0xFF) }
-        return "$KEY_FREE_DEVICE_ORDER_PREFIX$digest"
-    }
-
     companion object {
         private const val SHUTDOWN_REQUEST_EVENT_TYPE = "shutdown_poke_requested"
         private const val PRO_PRODUCT_ID = "wakefromfar_pro_unlock"
         private const val MONETIZATION_PREFS_NAME = "wolrelay_monetization"
         private const val KEY_PRO_UNLOCKED = "pro_unlocked"
-        private const val KEY_FREE_DEVICE_ORDER_PREFIX = "free_device_order_"
         private const val ACTIVITY_PAGE_SIZE = 30
         private const val ACTIVITY_POLL_INTERVAL_MS = 30_000L
 
@@ -848,3 +849,53 @@ class MainViewModel(application: Application) : AndroidViewModel(application), P
 }
 
 private const val FREE_DEVICE_LIMIT = 3
+
+internal fun sortDevicesForPresentation(devices: List<MyDeviceDto>): List<MyDeviceDto> {
+    return devices.sortedWith(
+        compareByDescending<MyDeviceDto> { it.is_favorite }
+            .thenBy { if (it.is_favorite || !it.group_name.isNullOrBlank()) 0 else 1 }
+            .thenBy { if (it.is_favorite || it.group_name.isNullOrBlank()) "" else it.group_name.trim() }
+            .thenBy { it.sort_order }
+            .thenBy(String.CASE_INSENSITIVE_ORDER) { it.displayTitle }
+            .thenBy(String.CASE_INSENSITIVE_ORDER) { it.name }
+            .thenBy { it.id },
+    )
+}
+
+internal fun buildDeviceSections(
+    devices: List<MyDeviceDto>,
+    favoritesTitle: String,
+    fallbackGroupTitle: String,
+): List<DeviceSectionUiModel> {
+    if (devices.isEmpty()) {
+        return emptyList()
+    }
+
+    val sortedDevices = sortDevicesForPresentation(devices)
+    val favorites = sortedDevices.filter { it.is_favorite }
+    val groupedDevices = sortedDevices.filterNot { it.is_favorite }
+    val sections = mutableListOf<DeviceSectionUiModel>()
+
+    if (favorites.isNotEmpty()) {
+        sections += DeviceSectionUiModel(
+            key = "favorites",
+            title = favoritesTitle,
+            devices = favorites,
+            isFavorites = true,
+        )
+    }
+
+    groupedDevices
+        .groupBy { device ->
+            device.group_name?.trim()?.takeIf { it.isNotEmpty() } ?: fallbackGroupTitle
+        }
+        .forEach { (groupTitle, groupDevices) ->
+            sections += DeviceSectionUiModel(
+                key = "group:$groupTitle",
+                title = groupTitle,
+                devices = groupDevices,
+            )
+        }
+
+    return sections
+}

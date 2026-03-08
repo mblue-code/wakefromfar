@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import sqlite3
 import time
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Annotated, Literal
 
@@ -15,21 +18,27 @@ from .apns import APNSConfigurationError, APNSNotificationService
 from .config import Settings, get_settings
 from .diagnostics import device_diagnostic_hints
 from .db import (
-    assign_device_to_user,
     count_admin_users,
     create_host,
+    create_device_membership,
     create_discovery_candidate,
     create_discovery_run,
     create_activity_event,
+    create_scheduled_wake_job,
     create_shutdown_poke_request,
     create_user,
+    delete_scheduled_wake_job,
     deactivate_notification_device,
+    delete_device_membership,
     delete_host,
     delete_user,
     fail_discovery_run,
-    get_assigned_host_by_id,
     get_discovery_candidate,
     get_discovery_run,
+    get_device_membership_by_id,
+    get_device_membership_for_user_device,
+    get_device_for_user_preferences,
+    get_scheduled_wake_job,
     get_host_by_mac,
     get_host_by_id,
     get_shutdown_poke_request,
@@ -37,28 +46,37 @@ from .db import (
     get_user_by_username,
     init_db,
     list_admin_audit_logs,
-    list_assignments,
+    list_all_devices_for_user_preferences,
+    list_device_memberships,
     list_discovery_candidates,
     list_discovery_events,
     list_discovery_runs,
     list_activity_events,
+    list_due_scheduled_wake_jobs,
+    list_scheduled_wake_jobs,
+    list_scheduled_wake_runs,
     list_shutdown_poke_requests,
     list_hosts,
     list_power_check_logs,
     list_users,
     list_wake_logs,
-    list_assigned_hosts,
+    get_visible_device_for_user,
+    list_visible_devices_for_user,
     log_admin_action,
     log_discovery_event,
     log_power_check,
     log_wake,
+    mark_scheduled_wake_job_executed,
     mark_discovery_candidate_imported,
     mark_discovery_run_running,
+    claim_scheduled_wake_job,
+    record_scheduled_wake_run,
     mark_shutdown_poke_resolved,
     mark_shutdown_poke_seen,
-    remove_assignment,
     complete_discovery_run,
     upsert_notification_device,
+    update_scheduled_wake_job,
+    update_device_membership,
     update_host,
     update_host_power_state,
     update_user_password_by_id,
@@ -89,9 +107,11 @@ from .schemas import (
     AdminUserOut,
     AdminUserUpdate,
     APNSDeviceRegistrationRequest,
-    AssignmentCreate,
-    AssignmentOut,
     ActivityEventOut,
+    DeviceMembershipCreate,
+    DeviceMembershipOut,
+    DeviceMembershipUpdate,
+    DevicePermissionsOut,
     DiscoveryCandidateOut,
     DiscoveryBulkImportRequest,
     DiscoveryBulkImportResponse,
@@ -100,17 +120,22 @@ from .schemas import (
     DiscoveryRunCreate,
     DiscoveryRunOut,
     DiscoveryValidateResponse,
-    HostOut,
     LoginRequest,
     LoginResponse,
     MeWakeResponse,
     MyDeviceOut,
+    MyDevicePreferencesUpdate,
     NotificationDeviceOut,
     PowerCheckResponse,
+    ScheduledWakeCreate,
+    ScheduledWakeOut,
+    ScheduledWakeRunOut,
+    ScheduledWakeSummaryOut,
+    ScheduledWakeUpdate,
     ShutdownPokeCreateRequest,
     ShutdownPokeOut,
-    WakeResponse,
 )
+from .scheduled_wakes import compute_next_run_at_iso, normalize_schedule_definition, parse_days_of_week_json
 from .security import create_token, decode_token, hash_password, verify_password
 from .telemetry import get_counters, increment_counter, structured_log
 from .wol import normalize_mac, resolve_target, send_magic_packet
@@ -129,6 +154,19 @@ _ADMIN_UI_CSP = (
     "frame-ancestors 'none'; "
     "base-uri 'self'"
 )
+_SCHEDULED_WAKE_RUNNER_LOCK = asyncio.Lock()
+
+
+@dataclass
+class _WakeExecutionOutcome:
+    result: Literal["already_on", "sent", "failed"]
+    message: str
+    detail: str
+    precheck_state: Literal["on", "off", "unknown"]
+    precheck_detail: str
+    sent_to: str | None
+    error_detail: str | None
+    wake_log_id: int | None
 
 
 def _init_bootstrap() -> None:
@@ -192,7 +230,17 @@ def on_startup() -> None:
 @asynccontextmanager
 async def app_lifespan(_app: FastAPI):
     on_startup()
-    yield
+    runner_task: asyncio.Task[None] | None = None
+    settings = get_settings()
+    if settings.scheduled_wake_runner:
+        runner_task = asyncio.create_task(_scheduled_wake_runner_loop())
+    try:
+        yield
+    finally:
+        if runner_task is not None:
+            runner_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await runner_task
 
 
 _DOCS_ENABLED = Settings().enable_api_docs
@@ -453,23 +501,6 @@ def _dispatch_shutdown_poke_admin_notifications() -> None:
     )
 
 
-def _host_to_legacy_out(row: dict, is_stale: bool | None = None) -> HostOut:
-    return HostOut(
-        id=row["id"],
-        name=row["name"],
-        mac=row["mac"],
-        group_name=row["group_name"],
-        broadcast=row["broadcast"],
-        subnet_cidr=row["subnet_cidr"],
-        udp_port=row["udp_port"],
-        source_ip=row["source_ip"],
-        display_name=row["display_name"],
-        last_power_state=row["last_power_state"] or "unknown",
-        last_power_checked_at=row["last_power_checked_at"],
-        is_stale=is_stale,
-    )
-
-
 def _host_to_admin_out(row: dict) -> AdminDeviceOut:
     return AdminDeviceOut(
         id=row["id"],
@@ -494,16 +525,63 @@ def _host_to_admin_out(row: dict) -> AdminDeviceOut:
     )
 
 
-def _host_to_my_device_out(row: dict, is_stale: bool) -> MyDeviceOut:
+def _device_membership_to_out(row: dict) -> DeviceMembershipOut:
+    return DeviceMembershipOut(
+        id=row["id"],
+        user_id=row["user_id"],
+        device_id=row["device_id"],
+        username=row["username"],
+        device_name=row["device_name"],
+        device_display_name=row["device_display_name"],
+        can_view_status=bool(row["can_view_status"]),
+        can_wake=bool(row["can_wake"]),
+        can_request_shutdown=bool(row["can_request_shutdown"]),
+        can_manage_schedule=bool(row["can_manage_schedule"]),
+        is_favorite=bool(row["is_favorite"]),
+        sort_order=int(row["sort_order"]),
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
+
+
+def _host_to_my_device_out(row: dict, is_stale: bool, force_admin_permissions: bool = False) -> MyDeviceOut:
+    def _optional_bool(key: str, default: bool) -> bool:
+        value = row[key] if key in row.keys() else None
+        return default if value is None else bool(value)
+
+    def _optional_int(key: str, default: int) -> int:
+        value = row[key] if key in row.keys() else None
+        return default if value is None else int(value)
+
+    total_schedules = _optional_int("scheduled_wake_total_count", 0)
+    enabled_schedules = _optional_int("scheduled_wake_enabled_count", 0)
+    schedule_summary = None
+    if total_schedules > 0:
+        schedule_summary = ScheduledWakeSummaryOut(
+            total_count=total_schedules,
+            enabled_count=enabled_schedules,
+            next_run_at=row["scheduled_wake_next_run_at"] if "scheduled_wake_next_run_at" in row.keys() else None,
+        )
+
+    permissions = DevicePermissionsOut(
+        can_view_status=True if force_admin_permissions else _optional_bool("can_view_status", True),
+        can_wake=True if force_admin_permissions else _optional_bool("can_wake", True),
+        can_request_shutdown=True if force_admin_permissions else _optional_bool("can_request_shutdown", True),
+        can_manage_schedule=True if force_admin_permissions else _optional_bool("can_manage_schedule", True),
+    )
     return MyDeviceOut(
         id=row["id"],
         name=row["name"],
         display_name=row["display_name"],
         mac=row["mac"],
         group_name=row["group_name"],
+        is_favorite=_optional_bool("is_favorite", False),
+        sort_order=_optional_int("sort_order", 0),
+        permissions=permissions,
         last_power_state=row["last_power_state"] or "unknown",
         last_power_checked_at=row["last_power_checked_at"],
         is_stale=is_stale,
+        scheduled_wake_summary=schedule_summary,
     )
 
 
@@ -521,14 +599,50 @@ def _is_stale(last_power_checked_at: str | None) -> bool:
     return age_seconds > settings.power_state_stale_seconds
 
 
-def _get_authorized_host(current_user: dict, host_id: str):
-    if current_user["role"] == "admin":
-        host = get_host_by_id(host_id)
-    else:
-        host = get_assigned_host_by_id(current_user["id"], host_id)
+_DEVICE_OPERATION_FLAGS: dict[str, tuple[str | None, str | None]] = {
+    "view": (None, None),
+    "power_check": ("can_view_status", "Power-check not permitted for this device"),
+    "wake": ("can_wake", "Wake not permitted for this device"),
+    "shutdown_poke": ("can_request_shutdown", "Shutdown request not permitted for this device"),
+}
+
+
+def _get_authorized_device(
+    current_user: dict,
+    host_id: str,
+    operation: Literal["view", "power_check", "wake", "shutdown_poke"],
+):
+    host = get_host_by_id(host_id)
     if not host:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Host not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Device not found")
+    if current_user["role"] == "admin":
+        return host
+    membership = get_device_membership_for_user_device(int(current_user["id"]), host_id)
+    if not membership:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Device not found")
+    flag_name, forbidden_detail = _DEVICE_OPERATION_FLAGS[operation]
+    if flag_name is not None and not bool(membership[flag_name]):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=forbidden_detail)
     return host
+
+
+def _validate_sort_order(sort_order: int | None) -> None:
+    if sort_order is None:
+        return
+    if sort_order < 0:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="sort_order must be non-negative")
+
+
+def _list_me_device_rows(current_user: dict) -> list[sqlite3.Row]:
+    if current_user["role"] == "admin":
+        return list_all_devices_for_user_preferences(int(current_user["id"]))
+    return list_visible_devices_for_user(int(current_user["id"]))
+
+
+def _get_me_device_row(current_user: dict, host_id: str) -> sqlite3.Row | None:
+    if current_user["role"] == "admin":
+        return get_device_for_user_preferences(int(current_user["id"]), host_id)
+    return get_visible_device_for_user(int(current_user["id"]), host_id)
 
 
 def _run_and_persist_power_check(host_row: dict) -> PowerCheckResponse:
@@ -605,6 +719,85 @@ def _send_magic_packet_with_retry(
     return False, last_error
 
 
+def _execute_wake_for_device(host: dict, *, actor_username: str) -> _WakeExecutionOutcome:
+    precheck = _run_and_persist_power_check(host)
+    if precheck.result == "on":
+        wake_log_id = log_wake(
+            host_id=host["id"],
+            actor_username=actor_username,
+            sent_to="",
+            result="already_on",
+            precheck_state="on",
+        )
+        return _WakeExecutionOutcome(
+            result="already_on",
+            message="Device is already on",
+            detail="device_already_on",
+            precheck_state="on",
+            precheck_detail=precheck.detail,
+            sent_to=None,
+            error_detail=None,
+            wake_log_id=wake_log_id,
+        )
+
+    target_ip = resolve_target(broadcast=host["broadcast"], subnet_cidr=host["subnet_cidr"])
+    udp_port = host["udp_port"] or 9
+    sent_to = f"{target_ip}:{udp_port}"
+    sent_ok, send_error = _send_magic_packet_with_retry(
+        mac=host["mac"],
+        target_ip=target_ip,
+        udp_port=udp_port,
+        interface=host["interface"],
+        source_ip=host["source_ip"],
+    )
+    if not sent_ok:
+        wake_log_id = log_wake(
+            host_id=host["id"],
+            actor_username=actor_username,
+            sent_to=sent_to,
+            result="failed",
+            error_detail=send_error,
+            precheck_state=precheck.result,
+        )
+        return _WakeExecutionOutcome(
+            result="failed",
+            message="Wake failed",
+            detail=send_error or "wake_send_failed",
+            precheck_state=precheck.result,
+            precheck_detail=precheck.detail,
+            sent_to=sent_to,
+            error_detail=send_error,
+            wake_log_id=wake_log_id,
+        )
+
+    is_misconfigured_precheck = precheck.result == "unknown" and (
+        precheck.detail.startswith("missing_check_") or precheck.detail == "invalid_method"
+    )
+    message = "Magic packet sent"
+    detail = "magic_packet_sent"
+    if is_misconfigured_precheck:
+        message = "Magic packet sent (power-check misconfigured; verify check settings)"
+        detail = "magic_packet_sent_power_check_misconfigured"
+
+    wake_log_id = log_wake(
+        host_id=host["id"],
+        actor_username=actor_username,
+        sent_to=sent_to,
+        result="sent",
+        precheck_state=precheck.result,
+    )
+    return _WakeExecutionOutcome(
+        result="sent",
+        message=message,
+        detail=detail,
+        precheck_state=precheck.result,
+        precheck_detail=precheck.detail,
+        sent_to=sent_to,
+        error_detail=None,
+        wake_log_id=wake_log_id,
+    )
+
+
 def _run_background_power_check(host_id: str) -> None:
     host = get_host_by_id(host_id)
     if not host:
@@ -625,6 +818,206 @@ def _parse_json_dict(text: str | None) -> dict:
     if isinstance(parsed, dict):
         return parsed
     return {}
+
+
+def _parse_scheduled_wake_days(days_of_week_json: str) -> list[str]:
+    try:
+        return parse_days_of_week_json(days_of_week_json)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+
+
+def _scheduled_wake_to_out(row: dict) -> ScheduledWakeOut:
+    return ScheduledWakeOut(
+        id=row["id"],
+        device_id=row["device_id"],
+        device_name=row["device_name"],
+        device_display_name=row["device_display_name"],
+        label=row["label"],
+        enabled=bool(row["enabled"]),
+        timezone=row["timezone"],
+        days_of_week=_parse_scheduled_wake_days(row["days_of_week_json"]),
+        local_time=row["local_time"],
+        next_run_at=row["next_run_at"],
+        last_run_at=row["last_run_at"],
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
+
+
+def _scheduled_wake_run_to_out(row: dict) -> ScheduledWakeRunOut:
+    return ScheduledWakeRunOut(
+        id=row["id"],
+        job_id=row["job_id"],
+        device_id=row["device_id"],
+        started_at=row["started_at"],
+        finished_at=row["finished_at"],
+        result=row["result"],
+        detail=row["detail"],
+        wake_log_id=row["wake_log_id"],
+    )
+
+
+def _resolved_scheduled_wake_values(
+    *,
+    payload: dict[str, object],
+    current_job: sqlite3.Row | None = None,
+) -> dict[str, object]:
+    now_utc = datetime.now(UTC)
+    current_days = _parse_scheduled_wake_days(current_job["days_of_week_json"]) if current_job is not None else []
+
+    device_id = str(payload.get("device_id") if "device_id" in payload else (current_job["device_id"] if current_job else ""))
+    label = str(payload.get("label") if "label" in payload else (current_job["label"] if current_job else "")).strip()
+    enabled = bool(payload.get("enabled") if "enabled" in payload else (bool(current_job["enabled"]) if current_job else True))
+    timezone_name = (
+        str(payload.get("timezone") if "timezone" in payload else (current_job["timezone"] if current_job else "")).strip()
+    )
+    days_of_week = payload.get("days_of_week") if "days_of_week" in payload else current_days
+    local_time = str(
+        payload.get("local_time") if "local_time" in payload else (current_job["local_time"] if current_job else "")
+    ).strip()
+
+    if not device_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="device_id is required")
+    if not label:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="label is required")
+    try:
+        timezone_name, normalized_days, normalized_local_time = normalize_schedule_definition(
+            timezone_name=timezone_name,
+            days_of_week=[str(day) for day in days_of_week] if isinstance(days_of_week, list) else [],
+            local_time=local_time,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    if get_host_by_id(device_id) is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Device not found")
+
+    schedule_fields_changed = current_job is None or any(
+        key in payload for key in ("timezone", "days_of_week", "local_time", "enabled")
+    )
+    next_run_at = current_job["next_run_at"] if current_job is not None else None
+    if enabled and schedule_fields_changed:
+        next_run_at = compute_next_run_at_iso(
+            timezone_name=timezone_name,
+            days_of_week=normalized_days,
+            local_time=normalized_local_time,
+            now_utc=now_utc,
+        )
+    if not enabled:
+        next_run_at = None
+
+    return {
+        "device_id": device_id,
+        "label": label,
+        "enabled": enabled,
+        "timezone": timezone_name,
+        "days_of_week": normalized_days,
+        "local_time": normalized_local_time,
+        "next_run_at": next_run_at,
+    }
+
+
+def _run_scheduled_wake_job(job: sqlite3.Row) -> ScheduledWakeRunOut:
+    started_at = datetime.now(UTC)
+    finished_at = started_at
+    result: Literal["sent", "already_on", "failed", "skipped"] = "skipped"
+    detail = "scheduled device not found"
+    wake_log_id: int | None = None
+    try:
+        host = get_host_by_id(str(job["device_id"]))
+        if host is None:
+            result = "skipped"
+            detail = "scheduled device not found"
+        else:
+            outcome = _execute_wake_for_device(dict(host), actor_username="scheduler")
+            result = outcome.result
+            detail = outcome.detail
+            wake_log_id = outcome.wake_log_id
+        finished_at = datetime.now(UTC)
+    except Exception as exc:
+        finished_at = datetime.now(UTC)
+        result = "failed"
+        detail = f"scheduled wake execution error: {exc}"
+        structured_log(
+            "scheduled_wake.run.error",
+            job_id=job["id"],
+            device_id=job["device_id"],
+            error=str(exc),
+        )
+
+    run_row = record_scheduled_wake_run(
+        job_id=str(job["id"]),
+        device_id=str(job["device_id"]),
+        started_at=started_at.isoformat(),
+        finished_at=finished_at.isoformat(),
+        result=result,
+        detail=detail,
+        wake_log_id=wake_log_id,
+    )
+    mark_scheduled_wake_job_executed(
+        job_id=str(job["id"]),
+        last_run_at=finished_at.isoformat(),
+        next_run_at=job["next_run_at"],
+    )
+    increment_counter(f"scheduled_wake.run.{result}")
+    structured_log(
+        "scheduled_wake.run.completed",
+        job_id=job["id"],
+        device_id=job["device_id"],
+        result=result,
+        detail=detail,
+        wake_log_id=wake_log_id,
+    )
+    return _scheduled_wake_run_to_out(run_row)
+
+
+def run_scheduled_wake_runner_cycle(limit: int | None = None) -> int:
+    settings = get_settings()
+    safe_limit = max(1, limit or settings.scheduled_wake_max_jobs_per_poll)
+    poll_now = datetime.now(UTC)
+    due_jobs = list_due_scheduled_wake_jobs(poll_now.isoformat(), limit=safe_limit)
+    processed = 0
+    for due_job in due_jobs:
+        due_at_text = str(due_job["next_run_at"] or "")
+        if not due_at_text:
+            continue
+        due_at = datetime.fromisoformat(due_at_text)
+        claimed_next_run_at = compute_next_run_at_iso(
+            timezone_name=str(due_job["timezone"]),
+            days_of_week=_parse_scheduled_wake_days(str(due_job["days_of_week_json"])),
+            local_time=str(due_job["local_time"]),
+            now_utc=due_at.astimezone(UTC),
+        )
+        claimed = claim_scheduled_wake_job(
+            job_id=str(due_job["id"]),
+            expected_next_run_at=due_at_text,
+            claimed_next_run_at=claimed_next_run_at,
+            claimed_at=poll_now.isoformat(),
+        )
+        if claimed is None:
+            continue
+        _run_scheduled_wake_job(claimed)
+        processed += 1
+    return processed
+
+
+async def _scheduled_wake_runner_loop() -> None:
+    settings = get_settings()
+    structured_log(
+        "scheduled_wake.runner.started",
+        poll_seconds=settings.scheduled_wake_poll_seconds,
+        max_jobs_per_poll=settings.scheduled_wake_max_jobs_per_poll,
+    )
+    while True:
+        try:
+            async with _SCHEDULED_WAKE_RUNNER_LOCK:
+                processed = await asyncio.to_thread(run_scheduled_wake_runner_cycle)
+                if processed:
+                    structured_log("scheduled_wake.runner.poll", processed=processed)
+        except Exception as exc:
+            structured_log("scheduled_wake.runner.error", error=str(exc))
+        await asyncio.sleep(settings.scheduled_wake_poll_seconds)
 
 
 def _discovery_run_to_out(row: dict) -> DiscoveryRunOut:
@@ -857,69 +1250,78 @@ def onboarding_claim_disabled() -> dict[str, str]:
     )
 
 
-@app.get("/hosts", response_model=list[HostOut], deprecated=True)
-def get_hosts(current_user: Annotated[dict, Depends(get_current_user)]) -> list[HostOut]:
-    rows = list_hosts() if current_user["role"] == "admin" else list_assigned_hosts(current_user["id"])
-    return [_host_to_legacy_out(row=row, is_stale=_is_stale(row["last_power_checked_at"])) for row in rows]
-
-
-@app.post("/hosts/{host_id}/wake", response_model=WakeResponse, deprecated=True)
-def wake_host_legacy(host_id: str, current_user: Annotated[dict, Depends(get_current_user)]) -> WakeResponse:
-    row = _get_authorized_host(current_user=current_user, host_id=host_id)
-
-    target_ip = resolve_target(broadcast=row["broadcast"], subnet_cidr=row["subnet_cidr"])
-    udp_port = row["udp_port"] or 9
-    sent_ok, send_error = _send_magic_packet_with_retry(
-        mac=row["mac"],
-        target_ip=target_ip,
-        udp_port=udp_port,
-        interface=row["interface"],
-        source_ip=row["source_ip"],
-    )
-    if not sent_ok:
-        log_wake(
-            host_id=host_id,
-            actor_username=current_user["username"],
-            sent_to=f"{target_ip}:{udp_port}",
-            result="failed",
-            error_detail=send_error,
-            precheck_state="unknown",
-        )
-        increment_counter("wake.failed")
-        structured_log("wake.failed", actor=current_user["username"], device_id=host_id, error=send_error)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"WoL send failed: {send_error}")
-
-    sent_to = f"{target_ip}:{udp_port}"
-    log_wake(
-        host_id=host_id,
-        actor_username=current_user["username"],
-        sent_to=sent_to,
-        result="sent",
-        precheck_state="unknown",
-    )
-    increment_counter("wake.sent")
-    structured_log("wake.sent", actor=current_user["username"], device_id=host_id, legacy=True)
-    return WakeResponse(ok=True, sent_to=sent_to, timestamp=datetime.now(UTC), result="sent")
-
-
 @app.get("/me/devices", response_model=list[MyDeviceOut])
 def me_devices(
     background_tasks: BackgroundTasks,
     current_user: Annotated[dict, Depends(get_current_user)],
 ) -> list[MyDeviceOut]:
-    rows = list_hosts() if current_user["role"] == "admin" else list_assigned_hosts(current_user["id"])
+    rows = _list_me_device_rows(current_user)
     result: list[MyDeviceOut] = []
     for row in rows:
         stale = _is_stale(row["last_power_checked_at"])
         if stale:
             background_tasks.add_task(_run_background_power_check, row["id"])
-        result.append(_host_to_my_device_out(row=row, is_stale=stale))
+        result.append(
+            _host_to_my_device_out(
+                row=row,
+                is_stale=stale,
+                force_admin_permissions=current_user["role"] == "admin",
+            )
+        )
     return result
+
+
+@app.patch("/me/devices/{host_id}/preferences", response_model=MyDeviceOut)
+def me_update_device_preferences(
+    host_id: str,
+    body: MyDevicePreferencesUpdate,
+    current_user: Annotated[dict, Depends(get_current_user)],
+) -> MyDeviceOut:
+    updates = {key: value for key, value in body.model_dump(exclude_unset=True).items() if value is not None}
+    _validate_sort_order(updates.get("sort_order"))
+
+    if current_user["role"] == "admin":
+        host = get_host_by_id(host_id)
+        if not host:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Device not found")
+    else:
+        host = _get_authorized_device(current_user=current_user, host_id=host_id, operation="view")
+
+    membership = get_device_membership_for_user_device(int(current_user["id"]), host_id)
+    if membership is None:
+        if current_user["role"] != "admin":
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Device not found")
+        membership = create_device_membership(
+            user_id=int(current_user["id"]),
+            device_id=host_id,
+            can_view_status=True,
+            can_wake=True,
+            can_request_shutdown=True,
+            can_manage_schedule=True,
+            is_favorite=bool(updates["is_favorite"]) if "is_favorite" in updates else False,
+            sort_order=int(updates["sort_order"]) if "sort_order" in updates else 0,
+        )
+    elif updates:
+        membership = update_device_membership(
+            membership["id"],
+            {key: int(value) if isinstance(value, bool) else value for key, value in updates.items()},
+        )
+        if membership is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Device membership not found")
+
+    row = _get_me_device_row(current_user, host_id)
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Device not found")
+    return _host_to_my_device_out(
+        row=row,
+        is_stale=_is_stale(row["last_power_checked_at"]),
+        force_admin_permissions=current_user["role"] == "admin",
+    )
 
 
 @app.post("/me/devices/{host_id}/power-check", response_model=PowerCheckResponse)
 def me_power_check(host_id: str, current_user: Annotated[dict, Depends(get_current_user)]) -> PowerCheckResponse:
-    host = _get_authorized_host(current_user=current_user, host_id=host_id)
+    host = _get_authorized_device(current_user=current_user, host_id=host_id, operation="power_check")
     return _run_and_persist_power_check(host)
 
 
@@ -938,138 +1340,58 @@ def me_wake(
         settings.wake_rate_limit_per_minute,
         "Too many wake attempts",
     )
-    host = _get_authorized_host(current_user=current_user, host_id=host_id)
+    host = _get_authorized_device(current_user=current_user, host_id=host_id, operation="wake")
     host_name = _host_label(host)
-    precheck = _run_and_persist_power_check(host)
     now = datetime.now(UTC)
+    outcome = _execute_wake_for_device(dict(host), actor_username=current_user["username"])
+    event_type = {
+        "already_on": "wake_already_on",
+        "failed": "wake_failed",
+        "sent": "wake_sent",
+    }[outcome.result]
+    event_summary = {
+        "already_on": f"{current_user['username']} woke {host_name} (already on)",
+        "failed": f"{current_user['username']} failed to wake {host_name}",
+        "sent": f"{current_user['username']} woke {host_name}",
+    }[outcome.result]
+    metadata = {
+        "result": outcome.result,
+        "precheck_state": outcome.precheck_state,
+    }
+    if outcome.sent_to is not None:
+        metadata["sent_to"] = outcome.sent_to
+    if outcome.precheck_detail:
+        metadata["precheck_detail"] = outcome.precheck_detail
+    if outcome.error_detail:
+        metadata["error_detail"] = outcome.error_detail
 
-    if precheck.result == "on":
-        log_wake(
-            host_id=host_id,
-            actor_username=current_user["username"],
-            sent_to="",
-            result="already_on",
-            precheck_state="on",
-        )
-        increment_counter("wake.already_on")
-        structured_log("wake.already_on", actor=current_user["username"], device_id=host_id, ip=ip)
-        _emit_activity_event(
-            event_type="wake_already_on",
-            actor=current_user,
-            target_type="device",
-            target_id=host_id,
-            server_id=host_id,
-            summary=f"{current_user['username']} woke {host_name} (already on)",
-            metadata={
-                "result": "already_on",
-                "precheck_state": "on",
-            },
-        )
-        return MeWakeResponse(
-            device_id=host_id,
-            result="already_on",
-            message="Device is already on",
-            precheck_state="on",
-            sent_to=None,
-            timestamp=now,
-        )
-
-    target_ip = resolve_target(broadcast=host["broadcast"], subnet_cidr=host["subnet_cidr"])
-    udp_port = host["udp_port"] or 9
-    sent_to = f"{target_ip}:{udp_port}"
-    sent_ok, send_error = _send_magic_packet_with_retry(
-        mac=host["mac"],
-        target_ip=target_ip,
-        udp_port=udp_port,
-        interface=host["interface"],
-        source_ip=host["source_ip"],
-    )
-    if not sent_ok:
-        log_wake(
-            host_id=host_id,
-            actor_username=current_user["username"],
-            sent_to=sent_to,
-            result="failed",
-            error_detail=send_error,
-            precheck_state=precheck.result,
-        )
-        increment_counter("wake.failed")
-        structured_log(
-            "wake.failed",
-            actor=current_user["username"],
-            device_id=host_id,
-            ip=ip,
-            precheck_state=precheck.result,
-            error=send_error,
-        )
-        _emit_activity_event(
-            event_type="wake_failed",
-            actor=current_user,
-            target_type="device",
-            target_id=host_id,
-            server_id=host_id,
-            summary=f"{current_user['username']} failed to wake {host_name}",
-            metadata={
-                "result": "failed",
-                "precheck_state": precheck.result,
-                "sent_to": sent_to,
-                "error_detail": send_error or "",
-            },
-        )
-        return MeWakeResponse(
-            device_id=host_id,
-            result="failed",
-            message="Wake failed",
-            precheck_state=precheck.result,
-            sent_to=sent_to,
-            timestamp=now,
-            error_detail=send_error,
-        )
-
-    is_misconfigured_precheck = precheck.result == "unknown" and (
-        precheck.detail.startswith("missing_check_") or precheck.detail == "invalid_method"
-    )
-    wake_message = "Magic packet sent"
-    if is_misconfigured_precheck:
-        wake_message = "Magic packet sent (power-check misconfigured; verify check settings)"
-
-    log_wake(
-        host_id=host_id,
-        actor_username=current_user["username"],
-        sent_to=sent_to,
-        result="sent",
-        precheck_state=precheck.result,
-    )
-    increment_counter("wake.sent")
+    increment_counter(f"wake.{outcome.result}")
     structured_log(
-        "wake.sent",
+        f"wake.{outcome.result}",
         actor=current_user["username"],
         device_id=host_id,
         ip=ip,
-        precheck_state=precheck.result,
-        precheck_detail=precheck.detail,
+        precheck_state=outcome.precheck_state,
+        precheck_detail=outcome.precheck_detail,
+        error=outcome.error_detail,
     )
     _emit_activity_event(
-        event_type="wake_sent",
+        event_type=event_type,
         actor=current_user,
         target_type="device",
         target_id=host_id,
         server_id=host_id,
-        summary=f"{current_user['username']} woke {host_name}",
-        metadata={
-            "result": "sent",
-            "precheck_state": precheck.result,
-            "precheck_detail": precheck.detail,
-            "sent_to": sent_to,
-        },
+        summary=event_summary,
+        metadata=metadata,
     )
     return MeWakeResponse(
         device_id=host_id,
-        result="sent",
-        message=wake_message,
-        precheck_state=precheck.result,
-        sent_to=sent_to,
+        result=outcome.result,
+        message=outcome.message,
+        precheck_state=outcome.precheck_state,
+        sent_to=outcome.sent_to,
         timestamp=now,
+        error_detail=outcome.error_detail,
     )
 
 
@@ -1138,7 +1460,7 @@ def me_shutdown_poke(
         settings.shutdown_poke_request_rate_limit_per_minute,
         "Too many shutdown requests",
     )
-    host = _get_authorized_host(current_user=current_user, host_id=host_id)
+    host = _get_authorized_device(current_user=current_user, host_id=host_id, operation="shutdown_poke")
     host_name = _host_label(host)
     message = (body.message if body else None) or None
     row = create_shutdown_poke_request(
@@ -1417,11 +1739,6 @@ def admin_list_devices(_: Annotated[dict, Depends(require_admin)]) -> list[Admin
     return [_host_to_admin_out(row) for row in list_hosts()]
 
 
-@app.get("/admin/hosts", response_model=list[AdminDeviceOut], deprecated=True)
-def admin_list_hosts_legacy(_: Annotated[dict, Depends(require_admin)]) -> list[AdminDeviceOut]:
-    return [_host_to_admin_out(row) for row in list_hosts()]
-
-
 @app.post("/admin/devices", status_code=status.HTTP_201_CREATED, response_model=AdminDeviceOut)
 def admin_create_device(
     body: AdminDeviceCreate,
@@ -1518,69 +1835,236 @@ def admin_delete_device(device_id: str, current_user: Annotated[dict, Depends(re
     return {"ok": True}
 
 
-@app.post("/admin/hosts", status_code=status.HTTP_201_CREATED, response_model=AdminDeviceOut, deprecated=True)
-def admin_create_host_legacy(
-    body: AdminDeviceCreate,
-    user: Annotated[dict, Depends(require_admin)],
-) -> AdminDeviceOut:
-    return admin_create_device(body=body, current_user=user)
+@app.get("/admin/device-memberships", response_model=list[DeviceMembershipOut])
+def admin_list_device_memberships(_: Annotated[dict, Depends(require_admin)]) -> list[DeviceMembershipOut]:
+    rows = list_device_memberships()
+    return [_device_membership_to_out(row) for row in rows]
 
 
-@app.get("/admin/assignments", response_model=list[AssignmentOut])
-def admin_list_assignments(_: Annotated[dict, Depends(require_admin)]) -> list[AssignmentOut]:
-    rows = list_assignments()
-    return [
-        AssignmentOut(
-            user_id=row["user_id"],
-            username=row["username"],
-            device_id=row["device_id"],
-            device_name=row["device_name"],
-            created_at=row["created_at"],
-        )
-        for row in rows
-    ]
-
-
-@app.post("/admin/assignments", status_code=status.HTTP_201_CREATED)
-def admin_create_assignment(
-    body: AssignmentCreate,
+@app.post("/admin/device-memberships", status_code=status.HTTP_201_CREATED, response_model=DeviceMembershipOut)
+def admin_create_device_membership(
+    body: DeviceMembershipCreate,
     current_user: Annotated[dict, Depends(require_admin)],
-) -> dict[str, str]:
+) -> DeviceMembershipOut:
     user = get_user_by_id(body.user_id)
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
     host = get_host_by_id(body.device_id)
     if not host:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Device not found")
-    assign_device_to_user(user_id=body.user_id, device_id=body.device_id)
+    try:
+        row = create_device_membership(
+            user_id=body.user_id,
+            device_id=body.device_id,
+            can_view_status=body.can_view_status,
+            can_wake=body.can_wake,
+            can_request_shutdown=body.can_request_shutdown,
+            can_manage_schedule=body.can_manage_schedule,
+            is_favorite=body.is_favorite,
+            sort_order=body.sort_order,
+        )
+    except sqlite3.IntegrityError as exc:
+        if "UNIQUE constraint failed" in str(exc):
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Device membership already exists") from exc
+        raise
     log_admin_action(
         actor_username=current_user["username"],
-        action="create_assignment",
-        target_type="assignment",
-        target_id=f"{body.user_id}:{body.device_id}",
-        detail=None,
+        action="create_device_membership",
+        target_type="device_membership",
+        target_id=row["id"],
+        detail=f"user_id={body.user_id},device_id={body.device_id}",
     )
-    increment_counter("admin_action.create_assignment")
-    return {"ok": "true"}
+    increment_counter("admin_action.create_device_membership")
+    return _device_membership_to_out(row)
 
 
-@app.delete("/admin/assignments/{user_id}/{device_id}")
-def admin_delete_assignment(
-    user_id: int,
-    device_id: str,
+@app.patch("/admin/device-memberships/{membership_id}", response_model=DeviceMembershipOut)
+def admin_update_device_membership(
+    membership_id: str,
+    body: DeviceMembershipUpdate,
+    current_user: Annotated[dict, Depends(require_admin)],
+) -> DeviceMembershipOut:
+    existing = get_device_membership_by_id(membership_id)
+    if not existing:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Device membership not found")
+    updates = {key: value for key, value in body.model_dump(exclude_unset=True).items() if value is not None}
+    _validate_sort_order(updates.get("sort_order"))
+    row = update_device_membership(
+        membership_id,
+        {key: int(value) if isinstance(value, bool) else value for key, value in updates.items()},
+    )
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Device membership not found")
+    log_admin_action(
+        actor_username=current_user["username"],
+        action="update_device_membership",
+        target_type="device_membership",
+        target_id=membership_id,
+        detail=json.dumps(updates, sort_keys=True, separators=(",", ":")),
+    )
+    increment_counter("admin_action.update_device_membership")
+    return _device_membership_to_out(row)
+
+
+@app.delete("/admin/device-memberships/{membership_id}")
+def admin_delete_device_membership(
+    membership_id: str,
     current_user: Annotated[dict, Depends(require_admin)],
 ) -> dict[str, bool]:
-    deleted = remove_assignment(user_id=user_id, device_id=device_id)
+    existing = get_device_membership_by_id(membership_id)
+    if not existing:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Device membership not found")
+    deleted = delete_device_membership(membership_id)
     if not deleted:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Assignment not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Device membership not found")
     log_admin_action(
         actor_username=current_user["username"],
-        action="delete_assignment",
-        target_type="assignment",
-        target_id=f"{user_id}:{device_id}",
-        detail=None,
+        action="delete_device_membership",
+        target_type="device_membership",
+        target_id=membership_id,
+        detail=f"user_id={existing['user_id']},device_id={existing['device_id']}",
     )
-    increment_counter("admin_action.delete_assignment")
+    increment_counter("admin_action.delete_device_membership")
+    return {"ok": True}
+
+
+@app.get("/admin/scheduled-wakes/runs", response_model=list[ScheduledWakeRunOut])
+def admin_list_scheduled_wake_runs(
+    _: Annotated[dict, Depends(require_admin)],
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    job_id: str | None = None,
+    device_id: str | None = None,
+) -> list[ScheduledWakeRunOut]:
+    rows = list_scheduled_wake_runs(limit=limit, job_id=job_id, device_id=device_id)
+    return [_scheduled_wake_run_to_out(row) for row in rows]
+
+
+@app.get("/admin/scheduled-wakes", response_model=list[ScheduledWakeOut])
+def admin_list_scheduled_wakes(
+    _: Annotated[dict, Depends(require_admin)],
+    limit: Annotated[int, Query(ge=1, le=200)] = 100,
+) -> list[ScheduledWakeOut]:
+    return [_scheduled_wake_to_out(row) for row in list_scheduled_wake_jobs(limit=limit)]
+
+
+@app.post("/admin/scheduled-wakes", status_code=status.HTTP_201_CREATED, response_model=ScheduledWakeOut)
+def admin_create_scheduled_wake(
+    body: ScheduledWakeCreate,
+    current_user: Annotated[dict, Depends(require_admin)],
+) -> ScheduledWakeOut:
+    resolved = _resolved_scheduled_wake_values(payload=body.model_dump())
+    row = create_scheduled_wake_job(
+        device_id=str(resolved["device_id"]),
+        created_by_user_id=int(current_user["id"]),
+        label=str(resolved["label"]),
+        enabled=bool(resolved["enabled"]),
+        timezone=str(resolved["timezone"]),
+        days_of_week=[str(day) for day in resolved["days_of_week"]],
+        local_time=str(resolved["local_time"]),
+        next_run_at=str(resolved["next_run_at"]) if resolved["next_run_at"] is not None else None,
+    )
+    log_admin_action(
+        actor_username=current_user["username"],
+        action="create_scheduled_wake_job",
+        target_type="scheduled_wake_job",
+        target_id=str(row["id"]),
+        detail=json.dumps(
+            {
+                "device_id": resolved["device_id"],
+                "enabled": resolved["enabled"],
+                "days_of_week": resolved["days_of_week"],
+                "local_time": resolved["local_time"],
+                "timezone": resolved["timezone"],
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
+    )
+    increment_counter("scheduled_wake.created")
+    structured_log(
+        "scheduled_wake.created",
+        actor=current_user["username"],
+        job_id=row["id"],
+        device_id=row["device_id"],
+        enabled=bool(row["enabled"]),
+        next_run_at=row["next_run_at"],
+    )
+    return _scheduled_wake_to_out(row)
+
+
+@app.patch("/admin/scheduled-wakes/{job_id}", response_model=ScheduledWakeOut)
+def admin_update_scheduled_wake(
+    job_id: str,
+    body: ScheduledWakeUpdate,
+    current_user: Annotated[dict, Depends(require_admin)],
+) -> ScheduledWakeOut:
+    current = get_scheduled_wake_job(job_id)
+    if not current:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Scheduled wake job not found")
+
+    payload = body.model_dump(exclude_unset=True)
+    if not payload:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No fields to update")
+
+    resolved = _resolved_scheduled_wake_values(payload=payload, current_job=current)
+    row = update_scheduled_wake_job(
+        job_id,
+        {
+            "device_id": resolved["device_id"],
+            "label": resolved["label"],
+            "enabled": int(bool(resolved["enabled"])),
+            "timezone": resolved["timezone"],
+            "days_of_week": resolved["days_of_week"],
+            "local_time": resolved["local_time"],
+            "next_run_at": resolved["next_run_at"],
+        },
+    )
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Scheduled wake job not found")
+    log_admin_action(
+        actor_username=current_user["username"],
+        action="update_scheduled_wake_job",
+        target_type="scheduled_wake_job",
+        target_id=job_id,
+        detail=json.dumps(payload, sort_keys=True, separators=(",", ":")),
+    )
+    increment_counter("scheduled_wake.updated")
+    structured_log(
+        "scheduled_wake.updated",
+        actor=current_user["username"],
+        job_id=job_id,
+        device_id=row["device_id"],
+        enabled=bool(row["enabled"]),
+        next_run_at=row["next_run_at"],
+    )
+    return _scheduled_wake_to_out(row)
+
+
+@app.delete("/admin/scheduled-wakes/{job_id}")
+def admin_delete_scheduled_wake(
+    job_id: str,
+    current_user: Annotated[dict, Depends(require_admin)],
+) -> dict[str, bool]:
+    current = get_scheduled_wake_job(job_id)
+    if not current:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Scheduled wake job not found")
+    deleted = delete_scheduled_wake_job(job_id)
+    if not deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Scheduled wake job not found")
+    log_admin_action(
+        actor_username=current_user["username"],
+        action="delete_scheduled_wake_job",
+        target_type="scheduled_wake_job",
+        target_id=job_id,
+        detail=f"device_id={current['device_id']},label={current['label']}",
+    )
+    increment_counter("scheduled_wake.deleted")
+    structured_log(
+        "scheduled_wake.deleted",
+        actor=current_user["username"],
+        job_id=job_id,
+        device_id=current["device_id"],
+    )
     return {"ok": True}
 
 
