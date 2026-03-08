@@ -22,6 +22,7 @@ Why `source_ip` and optional `interface`:
 - Ensures packets leave through the correct NIC.
 - Prevents wrong-route issues when policy routing or overlapping/private ranges exist.
 - In containers, `source_ip` is usually the most reliable option.
+- For non-root container processes, `source_ip` is the preferred setting because explicit interface binding can require additional network capabilities.
 
 Device examples:
 
@@ -70,6 +71,7 @@ Examples:
 ## 4. Docker Deployment (No Reverse Proxy)
 
 This repository uses `network_mode: host` for the backend, which is ideal for WoL broadcast traffic.
+The backend image itself runs as the non-root user `appuser`; host networking is used for LAN reachability, not because the process runs as root.
 
 Steps:
 
@@ -78,6 +80,15 @@ cp .env.example .env
 # edit .env:
 # TRUST_PROXY_HEADERS=false
 docker compose up -d --build
+```
+
+Minimal compose variant:
+
+```bash
+cp .env.example .env
+# edit .env:
+# TRUST_PROXY_HEADERS=false
+docker compose -f docker-compose.simple.yml up -d --build
 ```
 
 For a dedicated testing environment (separate DB volume), use:
@@ -120,6 +131,17 @@ Important:
 
 - `check_target` + `check_port` are required for reliable power state in app/admin UI.
 - If missing, `/me/devices` can only report `unknown`, and logs will show `missing_check_target` or `missing_check_port`.
+- Prefer `source_ip` over `interface` unless you have confirmed the container runtime has the capability needed for interface binding.
+
+### 4.1 Storage defaults
+
+The default compose files now use named Docker volumes for `/data`:
+
+- `wol-data`
+- `wol-data-testing`
+- `wol-data-prod`
+
+This keeps the default deployment simpler and avoids host-path ownership drift on rebuilds.
 
 ## 5. Docker Deployment Behind Reverse Proxy
 
@@ -185,6 +207,11 @@ For global rate limits across multiple backend instances, add shared Redis:
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.redis.yml up -d --build
 ```
+
+Note:
+
+- Redis is optional unless you need shared/distributed rate limits.
+- A published prebuilt container image would make deployment even closer to UpSnap-style "pull and run", but this repo currently builds from source.
 
 Validation:
 

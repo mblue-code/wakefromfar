@@ -26,6 +26,14 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
+Minimal Docker setup (same backend, fewer compose knobs):
+
+```bash
+cp .env.example .env
+# .env Werte setzen (APP_SECRET, ADMIN_PASS)
+docker compose -f docker-compose.simple.yml up -d --build
+```
+
 Testing-Deployment (separate DB volume):
 
 ```bash
@@ -55,6 +63,14 @@ Healthcheck:
 curl http://localhost:8080/health
 ```
 
+### Docker / Betrieb
+
+- Default Docker setup now uses named volumes instead of bind mounts for `/data`, which avoids common UID/GID and local path friction.
+- The container process already runs as a non-root user (`appuser`) in the image.
+- `docker-compose.simple.yml` is the shortest supported Docker entrypoint in this repo.
+- Shared Redis remains optional and is only needed for distributed/global rate limits.
+- A prebuilt GHCR image is still future packaging work; the repository currently builds locally from `backend/`.
+
 ### Security / Netzwerk
 
 - Kein Router Port-Forwarding.
@@ -67,7 +83,8 @@ curl http://localhost:8080/health
 
 - Pro Device `broadcast` (oder `subnet_cidr`) passend zum Zielnetz setzen.
 - Optional `interface` (z.B. `eth0`) setzen, um ein NIC explizit zu wählen.
-- Für Containerbetrieb bevorzugt `source_ip` setzen (IP der passenden Host-NIC), da das stabil ohne zusätzliche Container-Caps funktioniert.
+- Für Containerbetrieb und non-root Containerprozesse bevorzugt `source_ip` setzen (IP der passenden Host-NIC), da das stabil ohne zusätzliche Container-Caps funktioniert.
+- `interface` kann in manchen Umgebungen zusätzliche Netz-Capabilities erfordern, weil dafür ein Device-Bind versucht wird.
 - Hinter Reverse Proxy `TRUST_PROXY_HEADERS=true` und `TRUSTED_PROXY_CIDRS` auf die Proxy-IP/Netze setzen, damit Allowlist + Rate Limits die echte Client-IP nutzen.
 - Für mehrere Backend-Instanzen `RATE_LIMIT_BACKEND=redis` setzen und eine gemeinsame Redis-Instanz über `RATE_LIMIT_REDIS_URL` verwenden.
 - Sprint-4 Rate-Limits (per minute) are configurable via:

@@ -5,4 +5,7 @@ services:
       ENFORCE_IP_ALLOWLIST: ${ENFORCE_IP_ALLOWLIST:-true}
       TRUST_PROXY_HEADERS: ${TRUST_PROXY_HEADERS:-false}
     volumes:
-      - ./data-testing:/data
+      - wol-data-testing:/data
+
+volumes:
+  wol-data-testing:

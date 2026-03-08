@@ -11,4 +11,7 @@ services:
       RATE_LIMIT_REDIS_URL: ${RATE_LIMIT_REDIS_URL:-redis://redis:6379/0}
       ENABLE_API_DOCS: ${ENABLE_API_DOCS:-false}
     volumes:
-      - ./data-prod:/data
+      - wol-data-prod:/data
+
+volumes:
+  wol-data-prod:
