@@ -31,7 +31,7 @@ final class LoginViewModel: ObservableObject {
     init(sessionStore: SessionStore, preferences: AppPreferences) {
         self.sessionStore = sessionStore
         self.preferences = preferences
-        backendURL = preferences.backendURL.isEmpty ? AppPreferences.defaultBackendURL : preferences.backendURL
+        backendURL = preferences.backendURL
         username = preferences.lastUsername
         errorMessage = sessionStore.authMessageSnapshot()
     }

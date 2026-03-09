@@ -10,19 +10,31 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 
-class ApiClient {
-    private val json = Json {
+class ApiClient(
+    private val client: OkHttpClient = OkHttpClient.Builder().build(),
+    private val json: Json = Json {
         ignoreUnknownKeys = true
         explicitNulls = false
-    }
-
-    private val client = OkHttpClient.Builder().build()
-
-    suspend fun login(baseUrl: String, username: String, password: String): LoginResponse = withContext(Dispatchers.IO) {
-        val payload = json.encodeToString(LoginRequest(username = username, password = password))
+    },
+) {
+    suspend fun login(
+        baseUrl: String,
+        username: String,
+        password: String,
+        installationId: String? = null,
+        proofTicket: String? = null,
+    ): LoginResponse = withContext(Dispatchers.IO) {
+        val requestPayload = json.encodeToString(
+            LoginRequest(
+                username = username,
+                password = password,
+                installation_id = installationId,
+                proof_ticket = proofTicket,
+            ),
+        )
         val request = Request.Builder()
             .url("${normalizeBaseUrl(baseUrl)}/auth/login")
-            .post(payload.toRequestBody(JSON_MEDIA_TYPE))
+            .post(requestPayload.toRequestBody(JSON_MEDIA_TYPE))
             .build()
 
         client.newCall(request).execute().use { response ->
@@ -31,6 +43,78 @@ class ApiClient {
                 throw ApiException("Login failed (${response.code})", statusCode = response.code)
             }
             json.decodeFromString<LoginResponse>(responseBody)
+        }
+    }
+
+    suspend fun requestAppProofChallenge(
+        baseUrl: String,
+        platform: String,
+        purpose: String,
+        installationId: String,
+        username: String? = null,
+        appVersion: String? = null,
+        osVersion: String? = null,
+    ): AppProofChallengeResponse = withContext(Dispatchers.IO) {
+        val payload = json.encodeToString(
+            AppProofChallengeRequest(
+                platform = platform,
+                purpose = purpose,
+                installation_id = installationId,
+                username = username,
+                app_version = appVersion,
+                os_version = osVersion,
+            ),
+        )
+        val request = Request.Builder()
+            .url("${normalizeBaseUrl(baseUrl)}/auth/app-proof/challenge")
+            .post(payload.toRequestBody(JSON_MEDIA_TYPE))
+            .build()
+
+        client.newCall(request).execute().use { response ->
+            val responseBody = response.body?.string().orEmpty()
+            if (!response.isSuccessful) {
+                throw ApiException(
+                    errorFromResponse("App proof challenge failed", response.code, responseBody),
+                    statusCode = response.code,
+                )
+            }
+            json.decodeFromString<AppProofChallengeResponse>(responseBody)
+        }
+    }
+
+    suspend fun verifyAndroidAppProof(
+        baseUrl: String,
+        challengeId: String,
+        installationId: String,
+        requestHash: String,
+        integrityToken: String,
+        appVersion: String? = null,
+        osVersion: String? = null,
+    ): AppProofVerifyResponse = withContext(Dispatchers.IO) {
+        val payload = json.encodeToString(
+            AndroidAppProofVerifyRequest(
+                challenge_id = challengeId,
+                installation_id = installationId,
+                request_hash = requestHash,
+                integrity_token = integrityToken,
+                app_version = appVersion,
+                os_version = osVersion,
+            ),
+        )
+        val request = Request.Builder()
+            .url("${normalizeBaseUrl(baseUrl)}/auth/app-proof/verify/android")
+            .post(payload.toRequestBody(JSON_MEDIA_TYPE))
+            .build()
+
+        client.newCall(request).execute().use { response ->
+            val responseBody = response.body?.string().orEmpty()
+            if (!response.isSuccessful) {
+                throw ApiException(
+                    errorFromResponse("App proof verification failed", response.code, responseBody),
+                    statusCode = response.code,
+                )
+            }
+            json.decodeFromString<AppProofVerifyResponse>(responseBody)
         }
     }
 
@@ -54,10 +138,13 @@ class ApiClient {
             }
         }
 
-    suspend fun listMyDevices(baseUrl: String, token: String): List<MyDeviceDto> = withContext(Dispatchers.IO) {
-        val request = Request.Builder()
+    suspend fun listMyDevices(baseUrl: String, token: String, installationId: String? = null): List<MyDeviceDto> =
+        withContext(Dispatchers.IO) {
+        val request = authenticatedRequestBuilder(
+            token = token,
+            installationId = installationId,
+        )
             .url("${normalizeBaseUrl(baseUrl)}/me/devices")
-            .addHeader("Authorization", "Bearer $token")
             .get()
             .build()
 
@@ -73,10 +160,17 @@ class ApiClient {
         }
     }
 
-    suspend fun wakeDevice(baseUrl: String, token: String, hostId: String): MeWakeResponse = withContext(Dispatchers.IO) {
-        val request = Request.Builder()
+    suspend fun wakeDevice(
+        baseUrl: String,
+        token: String,
+        hostId: String,
+        installationId: String? = null,
+    ): MeWakeResponse = withContext(Dispatchers.IO) {
+        val request = authenticatedRequestBuilder(
+            token = token,
+            installationId = installationId,
+        )
             .url("${normalizeBaseUrl(baseUrl)}/me/devices/$hostId/wake")
-            .addHeader("Authorization", "Bearer $token")
             .post("".toRequestBody(null))
             .build()
 
@@ -98,6 +192,7 @@ class ApiClient {
         hostId: String,
         isFavorite: Boolean? = null,
         sortOrder: Int? = null,
+        installationId: String? = null,
     ): MyDeviceDto = withContext(Dispatchers.IO) {
         val payload = json.encodeToString(
             MyDevicePreferencesUpdateRequest(
@@ -105,9 +200,11 @@ class ApiClient {
                 sort_order = sortOrder,
             ),
         )
-        val request = Request.Builder()
+        val request = authenticatedRequestBuilder(
+            token = token,
+            installationId = installationId,
+        )
             .url("${normalizeBaseUrl(baseUrl)}/me/devices/$hostId/preferences")
-            .addHeader("Authorization", "Bearer $token")
             .patch(payload.toRequestBody(JSON_MEDIA_TYPE))
             .build()
 
@@ -129,6 +226,7 @@ class ApiClient {
         cursor: Int? = null,
         limit: Int = 50,
         typeFilter: String? = "wake,poke",
+        installationId: String? = null,
     ): List<ActivityEventDto> = withContext(Dispatchers.IO) {
         val urlBuilder = "${normalizeBaseUrl(baseUrl)}/admin/mobile/events".toHttpUrl().newBuilder()
             .addQueryParameter("limit", limit.toString())
@@ -138,9 +236,11 @@ class ApiClient {
         if (!typeFilter.isNullOrBlank()) {
             urlBuilder.addQueryParameter("type", typeFilter)
         }
-        val request = Request.Builder()
+        val request = authenticatedRequestBuilder(
+            token = token,
+            installationId = installationId,
+        )
             .url(urlBuilder.build())
-            .addHeader("Authorization", "Bearer $token")
             .get()
             .build()
 
@@ -161,15 +261,18 @@ class ApiClient {
         token: String,
         hostId: String,
         message: String? = null,
+        installationId: String? = null,
     ): ShutdownPokeDto = withContext(Dispatchers.IO) {
         val payload = json.encodeToString(
             ShutdownPokeCreateRequest(
                 message = message?.trim()?.ifBlank { null },
             ),
         )
-        val request = Request.Builder()
+        val request = authenticatedRequestBuilder(
+            token = token,
+            installationId = installationId,
+        )
             .url("${normalizeBaseUrl(baseUrl)}/me/devices/$hostId/shutdown-poke")
-            .addHeader("Authorization", "Bearer $token")
             .post(payload.toRequestBody(JSON_MEDIA_TYPE))
             .build()
 
@@ -189,10 +292,13 @@ class ApiClient {
         baseUrl: String,
         token: String,
         pokeId: String,
+        installationId: String? = null,
     ): ShutdownPokeDto = withContext(Dispatchers.IO) {
-        val request = Request.Builder()
+        val request = authenticatedRequestBuilder(
+            token = token,
+            installationId = installationId,
+        )
             .url("${normalizeBaseUrl(baseUrl)}/admin/shutdown-pokes/$pokeId/seen")
-            .addHeader("Authorization", "Bearer $token")
             .post("".toRequestBody(null))
             .build()
 
@@ -212,10 +318,13 @@ class ApiClient {
         baseUrl: String,
         token: String,
         pokeId: String,
+        installationId: String? = null,
     ): ShutdownPokeDto = withContext(Dispatchers.IO) {
-        val request = Request.Builder()
+        val request = authenticatedRequestBuilder(
+            token = token,
+            installationId = installationId,
+        )
             .url("${normalizeBaseUrl(baseUrl)}/admin/shutdown-pokes/$pokeId/resolve")
-            .addHeader("Authorization", "Bearer $token")
             .post("".toRequestBody(null))
             .build()
 
@@ -232,6 +341,18 @@ class ApiClient {
     }
 
     private fun normalizeBaseUrl(baseUrl: String): String = baseUrl.trim().trimEnd('/')
+
+    private fun authenticatedRequestBuilder(
+        token: String,
+        installationId: String? = null,
+    ): Request.Builder {
+        val builder = Request.Builder()
+            .addHeader("Authorization", "Bearer $token")
+        if (!installationId.isNullOrBlank()) {
+            builder.addHeader("X-WFF-Installation-ID", installationId)
+        }
+        return builder
+    }
 
     private fun errorFromResponse(prefix: String, code: Int, responseBody: String): String {
         val compact = responseBody.replace("\n", " ").trim().take(200)

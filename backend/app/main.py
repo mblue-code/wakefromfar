@@ -10,15 +10,17 @@ from datetime import UTC, datetime
 from typing import Annotated, Literal
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request, status
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from .admin_ui import router as admin_ui_router
+from .admin_ui import enforce_admin_ui_post_request, router as admin_ui_router
+from .app_proof import APP_PROOF_HEADER, AppProofError, AppProofService
 from .apns import APNSConfigurationError, APNSNotificationService
 from .config import Settings, get_settings
 from .diagnostics import device_diagnostic_hints
 from .db import (
     count_admin_users,
+    get_app_installation,
     create_host,
     create_device_membership,
     create_discovery_candidate,
@@ -52,6 +54,7 @@ from .db import (
     list_discovery_events,
     list_discovery_runs,
     list_activity_events,
+    list_app_installations,
     list_due_scheduled_wake_jobs,
     list_scheduled_wake_jobs,
     list_scheduled_wake_runs,
@@ -71,6 +74,7 @@ from .db import (
     mark_discovery_run_running,
     claim_scheduled_wake_job,
     record_scheduled_wake_run,
+    revoke_app_installation,
     mark_shutdown_poke_resolved,
     mark_shutdown_poke_seen,
     complete_discovery_run,
@@ -98,16 +102,30 @@ from .password_policy import (
     validate_password_for_role,
 )
 from .rate_limit import configure_rate_limiter, get_rate_limiter
-from .request_context import get_request_ip, is_https_request, is_ip_in_networks
+from .request_context import (
+    AUTHENTICATED_TLS_REQUIRED_DETAIL,
+    LOGIN_TLS_REQUIRED_DETAIL,
+    get_request_ip,
+    is_auth_transport_allowed,
+    is_https_request,
+    is_ip_in_networks,
+    parse_cidrs,
+)
 from .schemas import (
     AdminDeviceCreate,
     AdminDeviceOut,
     AdminDeviceUpdate,
+    AndroidAppProofVerifyRequest,
     AdminUserCreate,
     AdminUserOut,
     AdminUserUpdate,
     APNSDeviceRegistrationRequest,
     ActivityEventOut,
+    AppInstallationOut,
+    AppInstallationRevokeRequest,
+    AppProofChallengeRequest,
+    AppProofChallengeResponse,
+    AppProofVerifyResponse,
     DeviceMembershipCreate,
     DeviceMembershipOut,
     DeviceMembershipUpdate,
@@ -120,6 +138,7 @@ from .schemas import (
     DiscoveryRunCreate,
     DiscoveryRunOut,
     DiscoveryValidateResponse,
+    IOSAppProofVerifyRequest,
     LoginRequest,
     LoginResponse,
     MeWakeResponse,
@@ -127,6 +146,7 @@ from .schemas import (
     MyDevicePreferencesUpdate,
     NotificationDeviceOut,
     PowerCheckResponse,
+    SecurityStatusOut,
     ScheduledWakeCreate,
     ScheduledWakeOut,
     ScheduledWakeRunOut,
@@ -135,15 +155,17 @@ from .schemas import (
     ShutdownPokeCreateRequest,
     ShutdownPokeOut,
 )
+from .security_status import build_security_status
 from .scheduled_wakes import compute_next_run_at_iso, normalize_schedule_definition, parse_days_of_week_json
 from .security import create_token, decode_token, hash_password, verify_password
-from .telemetry import get_counters, increment_counter, structured_log
+from .telemetry import get_counters, get_recent_events, increment_counter, structured_log
 from .wol import normalize_mac, resolve_target, send_magic_packet
 
 auth_scheme = HTTPBearer(auto_error=True)
 _NETWORK_DIAGNOSTICS: dict[str, object] = {}
 _UNSAFE_APP_SECRETS = {"change-me", "replace-with-a-random-long-secret"}
 _UNSAFE_ADMIN_PASSWORDS = {"change-me-admin-password", "replace-with-strong-password"}
+_ADMIN_NETWORK_DENIED_DETAIL = "Admin access is not allowed from this network"
 _ADMIN_UI_CSP = (
     "default-src 'self'; "
     "script-src 'self' 'unsafe-inline'; "
@@ -183,6 +205,9 @@ def _init_bootstrap() -> None:
         )
     if settings.admin_pass and len(settings.admin_pass) < MIN_ADMIN_PASSWORD_LENGTH:
         raise RuntimeError(f"ADMIN_PASS is too short. Use at least {MIN_ADMIN_PASSWORD_LENGTH} characters.")
+    _validate_network_exposure_settings(settings)
+    _validate_auth_transport_settings(settings)
+    _validate_app_proof_settings(settings)
     if settings.apns_enabled:
         if not settings.apns_topic:
             raise RuntimeError("APNS_TOPIC must be set when APNS is enabled.")
@@ -194,6 +219,116 @@ def _init_bootstrap() -> None:
     init_db()
     if settings.admin_user and settings.admin_pass:
         upsert_admin(settings.admin_user, hash_password(settings.admin_pass))
+
+
+def _validate_network_exposure_settings(settings: Settings) -> None:
+    if not settings.enforce_ip_allowlist:
+        if settings.allow_unsafe_public_exposure:
+            return
+        raise RuntimeError(
+            "Refusing to start with ENFORCE_IP_ALLOWLIST=false unless "
+            "ALLOW_UNSAFE_PUBLIC_EXPOSURE=true is explicitly set."
+        )
+
+    allowed_cidrs = settings.allowed_cidrs
+    if not allowed_cidrs:
+        raise RuntimeError(
+            "IP_ALLOWLIST_CIDRS is empty. Set IP_ALLOWLIST_CIDRS to a comma-separated list of valid CIDRs "
+            "or set ENFORCE_IP_ALLOWLIST=false and ALLOW_UNSAFE_PUBLIC_EXPOSURE=true to acknowledge unsafe "
+            "exposure."
+        )
+
+    valid_cidrs, invalid_cidrs = parse_cidrs(allowed_cidrs)
+    if invalid_cidrs:
+        invalid_values = ", ".join(invalid_cidrs)
+        if not valid_cidrs:
+            raise RuntimeError(
+                "IP_ALLOWLIST_CIDRS did not contain any valid CIDRs. Invalid entries: "
+                f"{invalid_values}. Set a valid allowlist or set ENFORCE_IP_ALLOWLIST=false and "
+                "ALLOW_UNSAFE_PUBLIC_EXPOSURE=true to acknowledge unsafe exposure."
+            )
+        raise RuntimeError(
+            f"IP_ALLOWLIST_CIDRS contains invalid CIDR entries: {invalid_values}. Set IP_ALLOWLIST_CIDRS "
+            "to a comma-separated list of valid CIDRs or set ENFORCE_IP_ALLOWLIST=false and "
+            "ALLOW_UNSAFE_PUBLIC_EXPOSURE=true to acknowledge unsafe exposure."
+        )
+    if not valid_cidrs:
+        raise RuntimeError(
+            "IP_ALLOWLIST_CIDRS did not contain any valid CIDRs. Set a valid allowlist or set "
+            "ENFORCE_IP_ALLOWLIST=false and ALLOW_UNSAFE_PUBLIC_EXPOSURE=true to acknowledge unsafe "
+            "exposure."
+        )
+    _validate_admin_network_settings(settings)
+
+
+def _validate_admin_network_settings(settings: Settings) -> None:
+    admin_cidrs = settings.admin_allowed_cidrs_list
+    if not admin_cidrs:
+        if settings.allow_unsafe_public_exposure:
+            return
+        raise RuntimeError(
+            "ADMIN_IP_ALLOWLIST_CIDRS is empty. Set ADMIN_IP_ALLOWLIST_CIDRS to a comma-separated list of valid "
+            "CIDRs or set ALLOW_UNSAFE_PUBLIC_EXPOSURE=true to acknowledge an unsafe admin-plane configuration."
+        )
+
+    valid_cidrs, invalid_cidrs = parse_cidrs(admin_cidrs)
+    if invalid_cidrs:
+        invalid_values = ", ".join(invalid_cidrs)
+        if settings.allow_unsafe_public_exposure:
+            return
+        if not valid_cidrs:
+            raise RuntimeError(
+                "ADMIN_IP_ALLOWLIST_CIDRS did not contain any valid CIDRs. Invalid entries: "
+                f"{invalid_values}. Set ADMIN_IP_ALLOWLIST_CIDRS to a comma-separated list of valid CIDRs or set "
+                "ALLOW_UNSAFE_PUBLIC_EXPOSURE=true to acknowledge an unsafe admin-plane configuration."
+            )
+        raise RuntimeError(
+            "ADMIN_IP_ALLOWLIST_CIDRS contains invalid CIDR entries: "
+            f"{invalid_values}. Set ADMIN_IP_ALLOWLIST_CIDRS to a comma-separated list of valid CIDRs or set "
+            "ALLOW_UNSAFE_PUBLIC_EXPOSURE=true to acknowledge an unsafe admin-plane configuration."
+        )
+    if not valid_cidrs and not settings.allow_unsafe_public_exposure:
+        raise RuntimeError(
+            "ADMIN_IP_ALLOWLIST_CIDRS did not contain any valid CIDRs. Set ADMIN_IP_ALLOWLIST_CIDRS to a "
+            "comma-separated list of valid CIDRs or set ALLOW_UNSAFE_PUBLIC_EXPOSURE=true to acknowledge an "
+            "unsafe admin-plane configuration."
+        )
+
+
+def _validate_app_proof_settings(settings: Settings) -> None:
+    if settings.app_proof_challenge_ttl_seconds <= 0:
+        raise RuntimeError("APP_PROOF_CHALLENGE_TTL_SECONDS must be greater than 0.")
+    if settings.app_proof_degraded_grace_seconds < 0:
+        raise RuntimeError("APP_PROOF_DEGRADED_GRACE_SECONDS must be 0 or greater.")
+    if settings.app_proof_provider_timeout_seconds <= 0:
+        raise RuntimeError("APP_PROOF_PROVIDER_TIMEOUT_SECONDS must be greater than 0.")
+    if settings.app_proof_mode == "disabled":
+        return
+    if settings.app_proof_android_enabled:
+        if not settings.app_proof_android_package_name:
+            raise RuntimeError("APP_PROOF_ANDROID_PACKAGE_NAME must be set when app proof is enabled.")
+        if settings.app_proof_android_require_play_recognized and not settings.app_proof_android_allowed_cert_sha256_list:
+            raise RuntimeError(
+                "APP_PROOF_ANDROID_ALLOWED_CERT_SHA256 must contain at least one signing certificate digest "
+                "when Android app proof is enabled."
+            )
+    if settings.app_proof_ios_enabled:
+        if not settings.app_proof_ios_team_id or not settings.app_proof_ios_bundle_id:
+            raise RuntimeError(
+                "APP_PROOF_IOS_TEAM_ID and APP_PROOF_IOS_BUNDLE_ID must be set when iOS app proof is enabled."
+            )
+
+
+def _validate_auth_transport_settings(settings: Settings) -> None:
+    if not settings.allow_insecure_private_http:
+        return
+    _, invalid_cidrs = parse_cidrs(settings.private_http_allowed_cidrs_list)
+    if invalid_cidrs:
+        invalid_values = ", ".join(invalid_cidrs)
+        raise RuntimeError(
+            "PRIVATE_HTTP_ALLOWED_CIDRS contains invalid CIDR entries: "
+            f"{invalid_values}. Set PRIVATE_HTTP_ALLOWED_CIDRS to a comma-separated list of valid CIDRs."
+        )
 
 
 def _refresh_network_diagnostics() -> None:
@@ -255,25 +390,139 @@ app = FastAPI(
 app.include_router(admin_ui_router)
 
 
+def _path_matches_prefix(path: str, prefix: str) -> bool:
+    return path == prefix or path.startswith(prefix + "/")
+
+
+def _is_admin_ui_path(path: str) -> bool:
+    return _path_matches_prefix(path, "/admin/ui")
+
+
+def _is_admin_plane_path(path: str) -> bool:
+    return _path_matches_prefix(path, "/admin")
+
+
+def _is_request_on_admin_allowed_network(request: Request) -> bool:
+    settings = get_settings()
+    client_ip = get_request_ip(request, settings)
+    if not client_ip:
+        return False
+    try:
+        admin_cidrs = settings.parsed_admin_allowed_cidrs
+    except ValueError:
+        return False
+    return is_ip_in_networks(client_ip, admin_cidrs)
+
+
+def _json_error(status_code: int, detail: str) -> JSONResponse:
+    return JSONResponse(status_code=status_code, content={"detail": detail})
+
+
+def _record_security_block(
+    request: Request,
+    *,
+    counter: str,
+    event: str,
+    detail: str,
+    reason: str,
+) -> None:
+    increment_counter(counter)
+    structured_log(
+        event,
+        path=request.url.path,
+        method=request.method,
+        client_ip=_get_request_ip(request) or "unknown",
+        detail=detail,
+        reason=reason,
+    )
+
+
+def _security_status_payload() -> SecurityStatusOut:
+    settings = get_settings()
+    installation_rows = [dict(row) for row in list_app_installations(limit=200)]
+    recent_events = get_recent_events(limit=200)
+    return build_security_status(
+        settings=settings,
+        counters=get_counters(),
+        installation_rows=installation_rows,
+        recent_events=recent_events,
+    )
+
+
+async def _enforce_admin_ui_post_guard(request: Request):
+    if request.method != "POST" or not _is_admin_ui_path(request.url.path):
+        return None
+    try:
+        await enforce_admin_ui_post_request(request)
+    except HTTPException as exc:
+        return PlainTextResponse(str(exc.detail), status_code=exc.status_code)
+    return None
+
+
 @app.get("/favicon.ico", include_in_schema=False)
-def favicon_ico() -> RedirectResponse:
+def favicon_ico():
+    if not get_settings().admin_ui_enabled:
+        return PlainTextResponse("Not Found", status_code=404)
     return RedirectResponse(url="/admin/ui/favicon.png", status_code=307)
 
 
 @app.middleware("http")
 async def allowlist_middleware(request: Request, call_next):
     settings = get_settings()
+    if _is_admin_ui_path(request.url.path) and not settings.admin_ui_enabled:
+        return PlainTextResponse("Not Found", status_code=404)
+
     if not settings.enforce_ip_allowlist:
+        if _is_admin_plane_path(request.url.path) and not _is_request_on_admin_allowed_network(request):
+            _record_security_block(
+                request,
+                counter="security.admin_network.blocked",
+                event="security.admin_network.blocked",
+                detail=_ADMIN_NETWORK_DENIED_DETAIL,
+                reason="admin_allowlist_miss",
+            )
+            return _json_error(status.HTTP_403_FORBIDDEN, _ADMIN_NETWORK_DENIED_DETAIL)
+        admin_ui_post_guard = await _enforce_admin_ui_post_guard(request)
+        if admin_ui_post_guard is not None:
+            return admin_ui_post_guard
         return await call_next(request)
 
     client_ip = get_request_ip(request, settings)
     if not client_ip:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Missing client IP")
+        _record_security_block(
+            request,
+            counter="security.ip_allowlist.blocked",
+            event="security.ip_allowlist.blocked",
+            detail="Missing client IP",
+            reason="missing_client_ip",
+        )
+        return _json_error(status.HTTP_403_FORBIDDEN, "Missing client IP")
 
     allowed = is_ip_in_networks(client_ip, settings.allowed_cidrs)
 
     if not allowed:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Client IP not allowed")
+        _record_security_block(
+            request,
+            counter="security.ip_allowlist.blocked",
+            event="security.ip_allowlist.blocked",
+            detail="Client IP not allowed",
+            reason="allowlist_miss",
+        )
+        return _json_error(status.HTTP_403_FORBIDDEN, "Client IP not allowed")
+
+    if _is_admin_plane_path(request.url.path) and not _is_request_on_admin_allowed_network(request):
+        _record_security_block(
+            request,
+            counter="security.admin_network.blocked",
+            event="security.admin_network.blocked",
+            detail=_ADMIN_NETWORK_DENIED_DETAIL,
+            reason="admin_allowlist_miss",
+        )
+        return _json_error(status.HTTP_403_FORBIDDEN, _ADMIN_NETWORK_DENIED_DETAIL)
+
+    admin_ui_post_guard = await _enforce_admin_ui_post_guard(request)
+    if admin_ui_post_guard is not None:
+        return admin_ui_post_guard
 
     return await call_next(request)
 
@@ -296,6 +545,60 @@ def _get_request_ip(request: Request) -> str | None:
     return get_request_ip(request, get_settings())
 
 
+def _app_proof_service() -> AppProofService:
+    return AppProofService(get_settings())
+
+
+def _parse_json_dict(value: str | None) -> dict[str, object] | None:
+    if not value:
+        return None
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _serialize_app_installation(row) -> AppInstallationOut:
+    return AppInstallationOut(
+        installation_id=row["installation_id"],
+        platform=row["platform"],
+        status=row["status"],
+        user_id=row["user_id"],
+        session_version=int(row["session_version"] or 0),
+        proof_method=row["proof_method"],
+        app_id=row["app_id"],
+        app_version=row["app_version"],
+        os_version=row["os_version"],
+        last_verified_at=row["last_verified_at"],
+        last_login_at=row["last_login_at"],
+        last_seen_ip=row["last_seen_ip"],
+        last_provider_status=row["last_provider_status"],
+        last_provider_error=row["last_provider_error"],
+        last_verdict_json=_parse_json_dict(row["last_verdict_json"]),
+        last_failure_reason=row["last_failure_reason"],
+        last_failure_detail=row["last_failure_detail"],
+        last_failure_at=row["last_failure_at"],
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+        revoked_at=row["revoked_at"],
+        revoked_reason=row["revoked_reason"],
+    )
+
+
+def _enforce_auth_transport(request: Request, *, detail: str) -> None:
+    if is_auth_transport_allowed(request, get_settings()):
+        return
+    _record_security_block(
+        request,
+        counter="security.transport_auth.blocked",
+        event="security.transport_auth.blocked",
+        detail=detail,
+        reason="https_required",
+    )
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
+
+
 def _enforce_rate_limit(
     scope: str,
     key: str,
@@ -316,6 +619,8 @@ def _enforce_rate_limit(
 
 @app.get("/")
 def root():
+    if not get_settings().admin_ui_enabled:
+        return PlainTextResponse("WakeFromFar backend", status_code=200)
     return RedirectResponse("/admin/ui/login", status_code=302)
 
 
@@ -324,10 +629,108 @@ def health() -> dict[str, str]:
     return {"ok": "true"}
 
 
+@app.post("/auth/app-proof/challenge", response_model=AppProofChallengeResponse)
+def issue_app_proof_challenge(body: AppProofChallengeRequest, request: Request) -> AppProofChallengeResponse:
+    _enforce_auth_transport(request, detail=LOGIN_TLS_REQUIRED_DETAIL)
+    response = _app_proof_service().issue_challenge(
+        platform=body.platform,
+        purpose=body.purpose,
+        installation_id=body.installation_id,
+        username=body.username,
+        app_version=body.app_version,
+        os_version=body.os_version,
+        client_ip=_get_request_ip(request),
+    )
+    return AppProofChallengeResponse(
+        challenge_id=response["challenge_id"],
+        challenge=response["challenge"],
+        purpose=response["purpose"],
+        expires_in=response["expires_in"],
+        binding=response["binding"],
+    )
+
+
+@app.post("/auth/app-proof/verify/android", response_model=AppProofVerifyResponse)
+def verify_android_app_proof(body: AndroidAppProofVerifyRequest, request: Request) -> AppProofVerifyResponse:
+    _enforce_auth_transport(request, detail=LOGIN_TLS_REQUIRED_DETAIL)
+    service = _app_proof_service()
+    try:
+        proof = service.verify_android(
+            challenge_id=body.challenge_id,
+            installation_id=body.installation_id,
+            request_hash=body.request_hash,
+            integrity_token=body.integrity_token,
+            app_version=body.app_version,
+            os_version=body.os_version,
+            client_ip=_get_request_ip(request),
+        )
+    except AppProofError as exc:
+        service.record_verify_error(
+            platform="android",
+            purpose=None,
+            installation_id=body.installation_id,
+            challenge_id=body.challenge_id,
+            reason=exc.reason,
+            detail=exc.detail,
+            client_ip=_get_request_ip(request),
+            event=exc.log_event,
+        )
+        raise exc.to_http_exception()
+    proof_ticket, expires_in = service.build_proof_ticket(proof)
+    return AppProofVerifyResponse(
+        proof_ticket=proof_ticket,
+        proof_expires_in=expires_in,
+        installation_status=proof.installation_status,
+    )
+
+
+@app.post("/auth/app-proof/verify/ios", response_model=AppProofVerifyResponse)
+def verify_ios_app_proof(body: IOSAppProofVerifyRequest, request: Request) -> AppProofVerifyResponse:
+    _enforce_auth_transport(request, detail=LOGIN_TLS_REQUIRED_DETAIL)
+    service = _app_proof_service()
+    try:
+        proof = service.verify_ios(
+            mode=body.mode,
+            challenge_id=body.challenge_id,
+            installation_id=body.installation_id,
+            key_id=body.key_id,
+            attestation_object=body.attestation_object,
+            assertion_object=body.assertion_object,
+            receipt=body.receipt,
+            app_version=body.app_version,
+            os_version=body.os_version,
+            client_ip=_get_request_ip(request),
+        )
+    except AppProofError as exc:
+        service.record_verify_error(
+            platform="ios",
+            purpose=None,
+            installation_id=body.installation_id,
+            challenge_id=body.challenge_id,
+            reason=exc.reason,
+            detail=exc.detail,
+            client_ip=_get_request_ip(request),
+            event=exc.log_event,
+        )
+        raise exc.to_http_exception()
+    proof_ticket, expires_in = service.build_proof_ticket(proof)
+    return AppProofVerifyResponse(
+        proof_ticket=proof_ticket,
+        proof_expires_in=expires_in,
+        installation_status=proof.installation_status,
+    )
+
+
 def get_current_user(
+    request: Request,
     creds: Annotated[HTTPAuthorizationCredentials, Depends(auth_scheme)],
 ) -> dict:
+    _enforce_auth_transport(request, detail=AUTHENTICATED_TLS_REQUIRED_DETAIL)
     payload = decode_token(creds.credentials)
+    _app_proof_service().ensure_authenticated_installation(
+        token_payload=payload,
+        presented_installation_id=request.headers.get(APP_PROOF_HEADER),
+    )
     username = payload.get("sub", "")
     user = get_user_by_username(username)
     if not user:
@@ -1212,6 +1615,7 @@ def _execute_discovery_run(run_id: str) -> None:
 
 @app.post("/auth/login", response_model=LoginResponse)
 def login(body: LoginRequest, request: Request) -> LoginResponse:
+    _enforce_auth_transport(request, detail=LOGIN_TLS_REQUIRED_DETAIL)
     settings = get_settings()
     ip = _get_request_ip(request) or "unknown"
 
@@ -1232,13 +1636,44 @@ def login(body: LoginRequest, request: Request) -> LoginResponse:
         structured_log("login.failed", ip=ip, username=body.username)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 
+    service = _app_proof_service()
+    proof_decision = service.validate_login_proof(
+        username=user["username"],
+        role=user["role"],
+        installation_id=body.installation_id,
+        proof_ticket=body.proof_ticket,
+        client_ip=ip,
+    )
+    if not proof_decision.allowed:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Valid mobile app proof is required")
+
+    installation = None
+    if proof_decision.proof is not None:
+        installation = service.update_installation_after_login(
+            installation_id=proof_decision.proof.installation_id,
+            user_id=int(user["id"]),
+            client_ip=ip,
+        )
+
     token, expires_in = create_token(
         username=user["username"],
         role=user["role"],
         token_version=int(user["token_version"] or 0),
+        installation_id=str(installation["installation_id"]) if installation else None,
+        app_proof_method=str(installation["proof_method"]) if installation else None,
+        installation_session_version=int(installation["session_version"] or 0) if installation else None,
     )
     increment_counter("login.success")
-    structured_log("login.success", ip=ip, username=user["username"], role=user["role"])
+    structured_log(
+        "login.success",
+        ip=ip,
+        username=user["username"],
+        role=user["role"],
+        installation_id=str(installation["installation_id"]) if installation else None,
+        app_proof_mode=settings.app_proof_mode,
+        degraded=proof_decision.degraded,
+        degraded_reason=proof_decision.degraded_reason,
+    )
     return LoginResponse(token=token, expires_in=expires_in)
 
 
@@ -2185,7 +2620,55 @@ def admin_audit_logs(_: Annotated[dict, Depends(require_admin)]) -> list[dict]:
 
 @app.get("/admin/metrics")
 def admin_metrics(_: Annotated[dict, Depends(require_admin)]) -> dict:
-    return {"counters": get_counters()}
+    return {
+        "counters": get_counters(),
+        "security_status": _security_status_payload().model_dump(mode="json"),
+    }
+
+
+@app.get("/admin/security-status", response_model=SecurityStatusOut)
+def admin_security_status(_: Annotated[dict, Depends(require_admin)]) -> SecurityStatusOut:
+    return _security_status_payload()
+
+
+@app.get("/admin/app-installations", response_model=list[AppInstallationOut])
+def admin_list_app_installations(
+    _: Annotated[dict, Depends(require_admin)],
+    user_id: int | None = Query(default=None),
+    platform: Literal["android", "ios"] | None = Query(default=None),
+    status_filter: Literal["pending", "trusted", "report_only", "revoked"] | None = Query(default=None, alias="status"),
+    limit: Annotated[int, Query(ge=1, le=500)] = 100,
+) -> list[AppInstallationOut]:
+    return [
+        _serialize_app_installation(row)
+        for row in list_app_installations(user_id=user_id, platform=platform, status=status_filter, limit=limit)
+    ]
+
+
+@app.post("/admin/app-installations/{installation_id}/revoke", response_model=AppInstallationOut)
+def admin_revoke_app_installation(
+    installation_id: str,
+    body: AppInstallationRevokeRequest,
+    current_user: Annotated[dict, Depends(require_admin)],
+) -> AppInstallationOut:
+    row = revoke_app_installation(installation_id, reason=body.reason)
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Installation not found")
+    log_admin_action(
+        actor_username=current_user["username"],
+        action="revoke_installation",
+        target_type="app_installation",
+        target_id=installation_id,
+        detail=body.reason or "",
+    )
+    increment_counter("app_proof.installation_revoked")
+    structured_log(
+        "app_proof.installation_revoked",
+        actor=current_user["username"],
+        installation_id=installation_id,
+        reason=body.reason,
+    )
+    return _serialize_app_installation(row)
 
 
 @app.get("/admin/discovery/networks")

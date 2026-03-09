@@ -1,90 +1,73 @@
-# Release Gates (Testing And Production)
+# Release Gates
 
-This checklist is the final gate before promoting builds.
+This gate is for fresh deployments and pre-production rollout. There are no production users or production installations yet, so Sprint 8 does not add migration tooling or migration steps.
 
-For the native iPhone client release-hardening and TestFlight/App Store checklist, also review `docs/ios-release-readiness.md`.
+Use `/Users/max/projekte/wakefromfar/docs/security-preproduction-checklist.md` as the executable runbook. The list below is the release sign-off summary.
 
-## Gate 1: Before Testing
+## Gate 1: Backend Hardening
 
-1. Backend tests pass:
-   ```bash
-   cd backend
-   python3 -m venv .venv
-   source .venv/bin/activate
-   pip install -r requirements-dev.txt
-   pytest -q
-   ```
-2. Android CI jobs pass (`testDebugUnitTest`, `lintDebug`, `assembleRelease`).
-3. Android admin activity feed prerequisites are present:
-   - Admin login on Android opens `Devices` + `Activity` tabs
-   - `GET /admin/mobile/events` succeeds for admin session
-   - Android device card allows `Request shutdown` with optional note
-4. Environment file is prepared from `.env.example` and secrets are replaced:
-   - `APP_SECRET`
-   - `ADMIN_PASS`
-   - Shutdown poke rate-limit knobs are set for the environment profile:
-     - `SHUTDOWN_POKE_REQUEST_RATE_LIMIT_PER_MINUTE`
-     - `SHUTDOWN_POKE_SEEN_RATE_LIMIT_PER_MINUTE`
-     - `SHUTDOWN_POKE_RESOLVE_RATE_LIMIT_PER_MINUTE`
-5. Compose target is explicit:
-   - testing: `docker compose -f docker-compose.yml -f docker-compose.testing.yml up -d --build`
-6. Smoke test succeeds:
-   - `/health`
-   - admin login
-   - invite claim
-   - `/me/devices`
-   - wake path (`already_on` and `sent`)
-   - shutdown poke path:
-     - `POST /me/devices/{id}/shutdown-poke` returns 201 for assigned user/admin
-     - `GET /admin/shutdown-pokes?status=open` returns 200 for admin
-     - `POST /admin/shutdown-pokes/{id}/seen` then `.../resolve` return 200 for admin
-     - poke endpoint limits return 429 when limit is exceeded (request/seen/resolve)
-     - admin shutdown-poke endpoints return 403 for non-admin token
-   - admin mobile activity feed:
-     - `GET /admin/mobile/events?type=wake&limit=20` returns 200 for admin
-     - `GET /admin/mobile/events?type=poke&limit=20` returns 200 for admin
-     - pagination works with `cursor=<last_id>` and returns older ids only
-     - same endpoint returns 403 for non-admin user token
-   - metrics counters in `/admin/metrics` increase for:
-     - `activity_events.created`
-     - `activity_feed.poll_requests`
-     - `activity_feed.poll_errors` (trigger at least one forced failure in staging)
-     - `shutdown_pokes.open`
-     - `shutdown_pokes.resolved`
-
-## Gate 2: Before Production
-
-1. Deploy with prod overlay:
-   ```bash
-   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
-   ```
-2. Security config confirmed:
-   - `TOKEN_EXPIRES_SECONDS=28800`
+1. Backend tests pass from the repo virtualenv or CI.
+2. Startup validation still fails closed for:
+   - disabled IP allowlist without `ALLOW_UNSAFE_PUBLIC_EXPOSURE=true`
+   - empty or malformed `IP_ALLOWLIST_CIDRS`
+   - empty or malformed `ADMIN_IP_ALLOWLIST_CIDRS`
+   - malformed `PRIVATE_HTTP_ALLOWED_CIDRS`
+3. Secure defaults are explicitly reviewed in `.env`:
    - `ENFORCE_IP_ALLOWLIST=true`
-   - `TRUST_PROXY_HEADERS=true` only when behind proxy
-   - `TRUSTED_PROXY_CIDRS` contains only proxy networks
-   - For multiple backend instances: `RATE_LIMIT_BACKEND=redis` and shared `RATE_LIMIT_REDIS_URL`
-3. Backup created before rollout:
-   ```bash
-   python3 backend/scripts/backup_db.py
-   ```
-4. Admin observability endpoints verified:
-   - `/admin/audit-logs`
-   - `/admin/metrics`
-   - `/admin/diagnostics/devices`
-   - `/admin/pilot-metrics`
-   - `/admin/metrics` includes Sprint-4 counters (`activity_events.created`, `activity_feed.*`, `shutdown_pokes.*`)
-5. Android release artifact is signed using release keystore env vars:
-   - `WFF_RELEASE_STORE_FILE`
-   - `WFF_RELEASE_STORE_PASSWORD`
-   - `WFF_RELEASE_KEY_ALIAS`
-   - `WFF_RELEASE_KEY_PASSWORD`
-6. Rollback plan is ready:
-   - previous image tag available
-   - latest DB backup path recorded
+   - `REQUIRE_TLS_FOR_AUTH=true`
+   - `APP_PROOF_MODE` set intentionally
+   - `ADMIN_UI_ENABLED` and `ADMIN_MFA_REQUIRED` set intentionally
 
-## Note
+## Gate 2: Transport And Admin Plane
 
-- Default to `RATE_LIMIT_BACKEND=redis`.
-- `RATE_LIMIT_BACKEND=memory` is acceptable only for simple single-instance deployments.
-- Admin mobile notifications remain backend-driven/in-app (no Firebase/FCM dependency).
+1. Public HTTP login is blocked.
+2. Public HTTP authenticated `/me/*` and `/admin/*` traffic is blocked.
+3. Admin-plane isolation is verified:
+   - `/admin/*` and `/admin/ui/*` reject non-admin CIDRs
+   - `ADMIN_UI_ENABLED=false` returns `404` for browser admin paths
+4. Browser admin POST protections are verified:
+   - CSRF rejects missing/invalid token
+   - `Origin` / fallback `Referer` enforcement rejects cross-site requests
+
+## Gate 3: Browser Admin MFA
+
+1. MFA setup flow works for non-enrolled admin accounts when required.
+2. Enrolled admins must verify TOTP before receiving a full browser admin session.
+3. Invalid TOTP and expired pending-MFA state are rejected cleanly.
+4. Break-glass recovery procedure is documented and tested if browser admin MFA is enabled.
+
+## Gate 4: Mobile App Proof
+
+1. Rollout mode is explicit:
+   - `disabled`
+   - `report_only`
+   - `soft_enforce`
+   - `enforce_login`
+2. `report_only` behavior is verified in diagnostics and metrics.
+3. `enforce_login` blocks missing proof at `/auth/login`.
+4. Android Play Integrity configuration is present and verified.
+5. iOS App Attest configuration is present and verified.
+6. Session binding to installation ID still works on authenticated mobile requests.
+7. Admin bearer-token login rollout remains explicitly deferred unless `APP_PROOF_REQUIRE_ON_ADMIN_BEARER_LOGIN=true`.
+
+## Gate 5: Operator Diagnostics
+
+1. `/admin/security-status` is reachable for admins and shows:
+   - hardening mode
+   - risky-but-allowed warnings
+   - explicit deferred items
+   - app-proof installation counts by platform/state
+   - recent app-proof failure categories
+2. `/admin/metrics` exposes runtime counters plus the security-status snapshot.
+3. `/admin/app-installations` supports read-only installation inspection for pre-production support.
+4. Diagnostics do not expose secrets, bearer tokens, or raw attestation payloads.
+
+## Gate 6: Explicit Deferred Items
+
+Before release, confirm these remain documented and understood:
+
+- all-request proof-of-possession is not implemented
+- mTLS is deferred
+- DeviceCheck is not an enforcement substitute
+- admin bearer-login app proof is deferred by default
+- WakeFromFar remains private-network-first and public internet exposure is still unsupported

@@ -1,5 +1,7 @@
+import Foundation
 import XCTest
 
+@MainActor
 final class DeviceContractTests: XCTestCase {
     private let decoder: JSONDecoder = {
         let decoder = JSONDecoder()
@@ -134,4 +136,110 @@ final class DeviceContractTests: XCTestCase {
         XCTAssertEqual(sections[2].devices.map(\.id), ["2"])
         XCTAssertEqual(sections[3].devices.map(\.id), ["1"])
     }
+
+    func testLoginRequestEncodesInstallationBindingFields() throws {
+        let encoder = JSONEncoder()
+        let payload = try encoder.encode(
+            LoginRequest(
+                username: "alice",
+                password: "secret",
+                installationID: "install-1",
+                proofTicket: "ticket-1"
+            )
+        )
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: payload) as? [String: String])
+        XCTAssertEqual(object["username"], "alice")
+        XCTAssertEqual(object["password"], "secret")
+        XCTAssertEqual(object["installation_id"], "install-1")
+        XCTAssertEqual(object["proof_ticket"], "ticket-1")
+    }
+
+    func testAPIClientAddsInstallationHeaderForAuthenticatedRequests() async throws {
+        let session = makeURLSession()
+        let apiClient = APIClient(session: session)
+        URLProtocolStub.responseProvider = { request in
+            XCTAssertEqual(request.value(forHTTPHeaderField: "X-WFF-Installation-ID"), "install-2")
+            return HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+        }
+        URLProtocolStub.dataProvider = { _ in Data("[]".utf8) }
+
+        _ = try await apiClient.fetchMyDevices(
+            baseURL: URL(string: "https://example.test")!,
+            token: "jwt-token",
+            installationID: "install-2"
+        )
+    }
+
+    func testSessionStoreLoginPersistsSecureInstallationID() async throws {
+        let session = makeURLSession()
+        let apiClient = APIClient(session: session)
+        let suiteName = "DeviceContractTests.\(UUID().uuidString)"
+        let userDefaults = UserDefaults(suiteName: suiteName)!
+        defer { userDefaults.removePersistentDomain(forName: suiteName) }
+        let preferences = AppPreferences(userDefaults: userDefaults)
+        let keychainStore = KeychainStore(service: "DeviceContractTests.\(UUID().uuidString)")
+        let sessionStore = SessionStore(apiClient: apiClient, tokenStore: keychainStore, preferences: preferences)
+
+        URLProtocolStub.responseProvider = { request in
+            return HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+        }
+        URLProtocolStub.dataProvider = { _ in Data(#"{"token":"jwt-token","expires_in":28800}"#.utf8) }
+
+        try await sessionStore.login(
+            backendURLString: "https://example.test",
+            username: "alice",
+            password: "secret"
+        )
+
+        XCTAssertEqual(sessionStore.currentSession?.token, "jwt-token")
+        XCTAssertFalse(sessionStore.currentSession?.installationID.isEmpty ?? true)
+        XCTAssertEqual(
+            try keychainStore.readString(account: "app_installation_id"),
+            sessionStore.currentSession?.installationID
+        )
+    }
+
+    private func makeURLSession() -> URLSession {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [URLProtocolStub.self]
+        return URLSession(configuration: configuration)
+    }
+}
+
+private final class URLProtocolStub: URLProtocol {
+    static var responseProvider: ((URLRequest) -> HTTPURLResponse)?
+    static var dataProvider: ((URLRequest) -> Data)?
+
+    override class func canInit(with request: URLRequest) -> Bool {
+        true
+    }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+        request
+    }
+
+    override func startLoading() {
+        let response = URLProtocolStub.responseProvider?(request) ?? HTTPURLResponse(
+            url: request.url!,
+            statusCode: 500,
+            httpVersion: nil,
+            headerFields: nil
+        )!
+        let data = URLProtocolStub.dataProvider?(request) ?? Data()
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: data)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
 }

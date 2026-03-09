@@ -44,31 +44,110 @@ final class APIClient {
         self.encoder = encoder
     }
 
-    func login(baseURL: URL, username: String, password: String) async throws -> LoginResponse {
+    func login(
+        baseURL: URL,
+        username: String,
+        password: String,
+        installationID: String? = nil,
+        proofTicket: String? = nil
+    ) async throws -> LoginResponse {
         try await send(
             endpoint: .init(
                 path: "/auth/login",
                 method: "POST",
-                body: try encoder.encode(LoginRequest(username: username, password: password))
+                body: try encoder.encode(
+                    LoginRequest(
+                        username: username,
+                        password: password,
+                        installationID: installationID,
+                        proofTicket: proofTicket
+                    )
+                )
             ),
             baseURL: baseURL,
             token: nil
         )
     }
 
-    func fetchMyDevices(baseURL: URL, token: String) async throws -> [MyDevice] {
+    func requestAppProofChallenge(
+        baseURL: URL,
+        platform: String,
+        purpose: String,
+        installationID: String,
+        username: String? = nil,
+        appVersion: String? = nil,
+        osVersion: String? = nil
+    ) async throws -> AppProofChallengeResponse {
         try await send(
-            endpoint: .init(path: "/me/devices", method: "GET"),
+            endpoint: .init(
+                path: "/auth/app-proof/challenge",
+                method: "POST",
+                body: try encoder.encode(
+                    AppProofChallengeRequest(
+                        platform: platform,
+                        purpose: purpose,
+                        installationID: installationID,
+                        username: username,
+                        appVersion: appVersion,
+                        osVersion: osVersion
+                    )
+                )
+            ),
             baseURL: baseURL,
-            token: token
+            token: nil
         )
     }
 
-    func wakeDevice(hostID: String, baseURL: URL, token: String) async throws -> MeWakeResponse {
+    func verifyIOSAppProof(
+        baseURL: URL,
+        mode: String,
+        challengeID: String,
+        installationID: String,
+        keyID: String,
+        attestationObject: String? = nil,
+        assertionObject: String? = nil,
+        receipt: String? = nil,
+        appVersion: String? = nil,
+        osVersion: String? = nil
+    ) async throws -> AppProofVerifyResponse {
+        try await send(
+            endpoint: .init(
+                path: "/auth/app-proof/verify/ios",
+                method: "POST",
+                body: try encoder.encode(
+                    IOSAppProofVerifyRequest(
+                        mode: mode,
+                        challengeID: challengeID,
+                        installationID: installationID,
+                        keyID: keyID,
+                        attestationObject: attestationObject,
+                        assertionObject: assertionObject,
+                        receipt: receipt,
+                        appVersion: appVersion,
+                        osVersion: osVersion
+                    )
+                )
+            ),
+            baseURL: baseURL,
+            token: nil
+        )
+    }
+
+    func fetchMyDevices(baseURL: URL, token: String, installationID: String? = nil) async throws -> [MyDevice] {
+        try await send(
+            endpoint: .init(path: "/me/devices", method: "GET"),
+            baseURL: baseURL,
+            token: token,
+            installationID: installationID
+        )
+    }
+
+    func wakeDevice(hostID: String, baseURL: URL, token: String, installationID: String? = nil) async throws -> MeWakeResponse {
         try await send(
             endpoint: .init(path: "/me/devices/\(hostID)/wake", method: "POST"),
             baseURL: baseURL,
-            token: token
+            token: token,
+            installationID: installationID
         )
     }
 
@@ -77,7 +156,8 @@ final class APIClient {
         isFavorite: Bool? = nil,
         sortOrder: Int? = nil,
         baseURL: URL,
-        token: String
+        token: String,
+        installationID: String? = nil
     ) async throws -> MyDevice {
         try await send(
             endpoint: .init(
@@ -91,7 +171,8 @@ final class APIClient {
                 )
             ),
             baseURL: baseURL,
-            token: token
+            token: token,
+            installationID: installationID
         )
     }
 
@@ -99,7 +180,8 @@ final class APIClient {
         hostID: String,
         message: String?,
         baseURL: URL,
-        token: String
+        token: String,
+        installationID: String? = nil
     ) async throws -> ShutdownPoke {
         try await send(
             endpoint: .init(
@@ -108,7 +190,8 @@ final class APIClient {
                 body: try encoder.encode(ShutdownPokeCreateRequest(message: message?.isEmpty == true ? nil : message))
             ),
             baseURL: baseURL,
-            token: token
+            token: token,
+            installationID: installationID
         )
     }
 
@@ -118,7 +201,8 @@ final class APIClient {
         appBundleID: String,
         environment: APNSEnvironment,
         baseURL: URL,
-        authToken: String
+        authToken: String,
+        authInstallationID: String? = nil
     ) async throws -> NotificationDeviceRegistration {
         try await send(
             endpoint: .init(
@@ -134,14 +218,16 @@ final class APIClient {
                 )
             ),
             baseURL: baseURL,
-            token: authToken
+            token: authToken,
+            installationID: authInstallationID
         )
     }
 
     func deleteAPNSDevice(
         installationID: String,
         baseURL: URL,
-        authToken: String
+        authToken: String,
+        authInstallationID: String? = nil
     ) async throws {
         try await sendWithoutResponse(
             endpoint: .init(
@@ -149,7 +235,8 @@ final class APIClient {
                 method: "DELETE"
             ),
             baseURL: baseURL,
-            token: authToken
+            token: authToken,
+            installationID: authInstallationID
         )
     }
 
@@ -158,7 +245,8 @@ final class APIClient {
         token: String,
         cursor: Int?,
         limit: Int,
-        typeFilter: String?
+        typeFilter: String?,
+        installationID: String? = nil
     ) async throws -> [ActivityEvent] {
         var queryItems = [URLQueryItem(name: "limit", value: String(limit))]
         if let cursor {
@@ -175,14 +263,16 @@ final class APIClient {
                 queryItems: queryItems
             ),
             baseURL: baseURL,
-            token: token
+            token: token,
+            installationID: installationID
         )
     }
 
     func markShutdownPokeSeen(
         pokeID: String,
         baseURL: URL,
-        token: String
+        token: String,
+        installationID: String? = nil
     ) async throws -> ShutdownPoke {
         try await send(
             endpoint: .init(
@@ -190,14 +280,16 @@ final class APIClient {
                 method: "POST"
             ),
             baseURL: baseURL,
-            token: token
+            token: token,
+            installationID: installationID
         )
     }
 
     func markShutdownPokeResolved(
         pokeID: String,
         baseURL: URL,
-        token: String
+        token: String,
+        installationID: String? = nil
     ) async throws -> ShutdownPoke {
         try await send(
             endpoint: .init(
@@ -205,7 +297,8 @@ final class APIClient {
                 method: "POST"
             ),
             baseURL: baseURL,
-            token: token
+            token: token,
+            installationID: installationID
         )
     }
 
@@ -229,9 +322,10 @@ final class APIClient {
     private func send<Response: Decodable>(
         endpoint: Endpoint,
         baseURL: URL,
-        token: String?
+        token: String?,
+        installationID: String? = nil
     ) async throws -> Response {
-        let request = try buildRequest(endpoint: endpoint, baseURL: baseURL, token: token)
+        let request = try buildRequest(endpoint: endpoint, baseURL: baseURL, token: token, installationID: installationID)
         let (data, response) = try await session.data(for: request)
 
         guard let httpResponse = response as? HTTPURLResponse else {
@@ -255,9 +349,10 @@ final class APIClient {
     private func sendWithoutResponse(
         endpoint: Endpoint,
         baseURL: URL,
-        token: String?
+        token: String?,
+        installationID: String? = nil
     ) async throws {
-        let request = try buildRequest(endpoint: endpoint, baseURL: baseURL, token: token)
+        let request = try buildRequest(endpoint: endpoint, baseURL: baseURL, token: token, installationID: installationID)
         let (_, response) = try await session.data(for: request)
 
         guard let httpResponse = response as? HTTPURLResponse else {
@@ -272,7 +367,12 @@ final class APIClient {
         }
     }
 
-    private func buildRequest(endpoint: Endpoint, baseURL: URL, token: String?) throws -> URLRequest {
+    private func buildRequest(
+        endpoint: Endpoint,
+        baseURL: URL,
+        token: String?,
+        installationID: String? = nil
+    ) throws -> URLRequest {
         guard var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else {
             throw APIClientError.invalidBaseURL
         }
@@ -296,6 +396,9 @@ final class APIClient {
         }
         if let token {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        if let installationID, !installationID.isEmpty {
+            request.setValue(installationID, forHTTPHeaderField: "X-WFF-Installation-ID")
         }
 
         return request

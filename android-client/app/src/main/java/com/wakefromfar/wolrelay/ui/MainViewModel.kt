@@ -26,13 +26,17 @@ import com.android.billingclient.api.QueryPurchasesParams
 import com.wakefromfar.wolrelay.AppLanguage
 import com.wakefromfar.wolrelay.LanguagePrefs
 import com.wakefromfar.wolrelay.R
+import com.wakefromfar.wolrelay.data.AndroidAppProofCoordinator
 import com.wakefromfar.wolrelay.data.ApiClient
 import com.wakefromfar.wolrelay.data.ApiException
 import com.wakefromfar.wolrelay.data.ActivityEventDto
 import com.wakefromfar.wolrelay.data.InviteLinkParser
+import com.wakefromfar.wolrelay.data.InstallationIdStore
 import com.wakefromfar.wolrelay.data.MyDeviceDto
+import com.wakefromfar.wolrelay.data.PlayIntegrityStandardTokenProvider
 import com.wakefromfar.wolrelay.data.SecurePrefs
 import com.wakefromfar.wolrelay.data.ThemeMode
+import com.wakefromfar.wolrelay.BuildConfig
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -84,6 +88,11 @@ data class AppUiState(
 class MainViewModel(application: Application) : AndroidViewModel(application), PurchasesUpdatedListener {
     private val prefs = SecurePrefs(application)
     private val api = ApiClient()
+    private val appProof = AndroidAppProofCoordinator(
+        apiClient = api,
+        installationIdStore = InstallationIdStore { prefs.getInstallationId() },
+        tokenProvider = buildIntegrityTokenProvider(application.applicationContext),
+    )
     private val adminNotifications = AdminNotificationDispatcher(application.applicationContext)
     private val monetizationPrefs: SharedPreferences =
         application.getSharedPreferences(MONETIZATION_PREFS_NAME, Context.MODE_PRIVATE)
@@ -132,6 +141,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application), P
     }
 
     private fun tr(@StringRes resId: Int, vararg args: Any): String = getApplication<Application>().getString(resId, *args)
+
+    private fun installationId(): String = prefs.getInstallationId()
+
+    private fun buildIntegrityTokenProvider(context: Context) =
+        if (BuildConfig.PLAY_INTEGRITY_CLOUD_PROJECT_NUMBER.isBlank()) {
+            com.wakefromfar.wolrelay.data.IntegrityTokenProvider { throw IllegalStateException("Play Integrity not configured") }
+        } else {
+            PlayIntegrityStandardTokenProvider(
+                context = context,
+                cloudProjectNumber = BuildConfig.PLAY_INTEGRITY_CLOUD_PROJECT_NUMBER.toLong(),
+            )
+        }
 
     private fun messageOr(@StringRes fallbackResId: Int, ex: Exception): String {
         if (ex is ApiException) {
@@ -244,10 +265,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application), P
         state = state.copy(isLoading = true, error = null, info = null)
         viewModelScope.launch {
             try {
+                val proof = appProof.prepareLoginProof(state.backendUrl, state.username.trim())
                 val response = api.login(
                     baseUrl = state.backendUrl,
                     username = state.username,
                     password = state.password,
+                    installationId = proof.installationId,
+                    proofTicket = proof.proofTicket,
                 )
                 val role = extractRoleFromToken(response.token)
                 prefs.setToken(response.token)
@@ -347,7 +371,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application), P
         state = state.copy(isLoading = true, error = null)
         viewModelScope.launch {
             try {
-                allVisibleDevices = sortDevicesForPresentation(api.listMyDevices(baseUrl = state.backendUrl, token = token))
+                allVisibleDevices = sortDevicesForPresentation(
+                    api.listMyDevices(
+                        baseUrl = state.backendUrl,
+                        token = token,
+                        installationId = installationId(),
+                    ),
+                )
                 applyDeviceEntitlement(isLoading = false)
             } catch (ex: Exception) {
                 state = state.copy(isLoading = false, error = messageOr(R.string.error_devices_load_failed, ex))
@@ -374,6 +404,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application), P
                     token = token,
                     limit = ACTIVITY_PAGE_SIZE,
                     typeFilter = "wake,poke",
+                    installationId = installationId(),
                 )
                 if (state.token != token || !state.isAdmin) {
                     return@launch
@@ -434,6 +465,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application), P
                     cursor = cursor,
                     limit = ACTIVITY_PAGE_SIZE,
                     typeFilter = "wake,poke",
+                    installationId = installationId(),
                 )
                 if (state.token != token || !state.isAdmin) {
                     return@launch
@@ -488,7 +520,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application), P
         state = state.copy(isLoading = true, error = null)
         viewModelScope.launch {
             try {
-                val res = api.wakeDevice(baseUrl = state.backendUrl, token = token, hostId = device.id)
+                val res = api.wakeDevice(
+                    baseUrl = state.backendUrl,
+                    token = token,
+                    hostId = device.id,
+                    installationId = installationId(),
+                )
                 val msg = when (res.result) {
                     "already_on" -> tr(R.string.info_wake_already_on)
                     "sent" -> tr(
@@ -530,6 +567,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application), P
                     token = token,
                     hostId = device.id,
                     message = message,
+                    installationId = installationId(),
                 )
                 state = state.copy(isLoading = false, info = tr(R.string.info_shutdown_request_sent))
                 if (state.isAdmin) {
@@ -558,6 +596,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application), P
                     token = token,
                     hostId = device.id,
                     isFavorite = !device.is_favorite,
+                    installationId = installationId(),
                 )
                 allVisibleDevices = sortDevicesForPresentation(
                     allVisibleDevices.map { existing ->
@@ -586,6 +625,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application), P
                     baseUrl = state.backendUrl,
                     token = token,
                     pokeId = pokeId,
+                    installationId = installationId(),
                 )
                 state = state.copy(info = tr(R.string.info_shutdown_request_seen))
                 refreshActivityEvents()
@@ -607,6 +647,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application), P
                     baseUrl = state.backendUrl,
                     token = token,
                     pokeId = pokeId,
+                    installationId = installationId(),
                 )
                 state = state.copy(info = tr(R.string.info_shutdown_request_resolved))
                 refreshActivityEvents()

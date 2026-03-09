@@ -11,11 +11,137 @@ from .password_policy import MIN_USER_PASSWORD_LENGTH
 class LoginRequest(BaseModel):
     username: str
     password: str
+    installation_id: str | None = Field(default=None, min_length=1, max_length=128)
+    proof_ticket: str | None = None
 
 
 class LoginResponse(BaseModel):
     token: str
     expires_in: int
+
+
+class AppProofChallengeRequest(BaseModel):
+    platform: Literal["android", "ios"]
+    purpose: Literal["enroll", "login", "reauth"]
+    installation_id: str = Field(min_length=1, max_length=128)
+    username: str | None = None
+    app_version: str | None = Field(default=None, max_length=64)
+    os_version: str | None = Field(default=None, max_length=64)
+
+
+class AppProofChallengeBinding(BaseModel):
+    canonical_fields: list[str]
+
+
+class AppProofChallengeResponse(BaseModel):
+    challenge_id: str
+    challenge: str
+    purpose: Literal["enroll", "login", "reauth"]
+    expires_in: int
+    binding: AppProofChallengeBinding
+
+
+class AndroidAppProofVerifyRequest(BaseModel):
+    challenge_id: str
+    installation_id: str = Field(min_length=1, max_length=128)
+    request_hash: str = Field(min_length=10, max_length=256)
+    integrity_token: str = Field(min_length=16)
+    app_version: str | None = Field(default=None, max_length=64)
+    os_version: str | None = Field(default=None, max_length=64)
+
+
+class IOSAppProofVerifyRequest(BaseModel):
+    mode: Literal["attest", "assert"]
+    challenge_id: str
+    installation_id: str = Field(min_length=1, max_length=128)
+    key_id: str = Field(min_length=8, max_length=512)
+    attestation_object: str | None = None
+    assertion_object: str | None = None
+    receipt: str | None = None
+    app_version: str | None = Field(default=None, max_length=64)
+    os_version: str | None = Field(default=None, max_length=64)
+
+
+class AppProofVerifyResponse(BaseModel):
+    proof_ticket: str
+    proof_expires_in: int
+    installation_status: Literal["pending", "trusted", "report_only", "revoked"]
+
+
+class AppInstallationOut(BaseModel):
+    installation_id: str
+    platform: Literal["android", "ios"]
+    status: Literal["pending", "trusted", "report_only", "revoked"]
+    user_id: int | None = None
+    session_version: int
+    proof_method: str | None = None
+    app_id: str | None = None
+    app_version: str | None = None
+    os_version: str | None = None
+    last_verified_at: datetime | None = None
+    last_login_at: datetime | None = None
+    last_seen_ip: str | None = None
+    last_provider_status: str | None = None
+    last_provider_error: str | None = None
+    last_verdict_json: dict[str, object] | None = None
+    last_failure_reason: str | None = None
+    last_failure_detail: str | None = None
+    last_failure_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+    revoked_at: datetime | None = None
+    revoked_reason: str | None = None
+
+
+class AppInstallationRevokeRequest(BaseModel):
+    reason: str | None = Field(default=None, max_length=255)
+
+
+class SecurityWarningOut(BaseModel):
+    code: str
+    severity: Literal["info", "warning"]
+    message: str
+
+
+class SecurityDeferralOut(BaseModel):
+    code: str
+    message: str
+
+
+class SecurityCounterOut(BaseModel):
+    name: str
+    value: int
+
+
+class RecentSecurityCategoryOut(BaseModel):
+    category: str
+    count: int
+    last_seen_at: datetime | None = None
+
+
+class InstallationPlatformSummaryOut(BaseModel):
+    total: int
+    by_status: dict[str, int]
+
+
+class SecurityStatusOut(BaseModel):
+    generated_at: datetime
+    private_network_first: bool
+    hardening_mode: str
+    app_proof_mode: Literal["disabled", "report_only", "soft_enforce", "enforce_login"]
+    admin_bearer_login_app_proof_deferred: bool
+    admin_ui_enabled: bool
+    admin_mfa_required: bool
+    require_tls_for_auth: bool
+    allow_insecure_private_http: bool
+    allow_unsafe_public_exposure: bool
+    ip_allowlist_enabled: bool
+    allowlist_summary: dict[str, object]
+    app_proof_installations: dict[str, InstallationPlatformSummaryOut]
+    recent_app_proof_failures: list[RecentSecurityCategoryOut]
+    security_counters: list[SecurityCounterOut]
+    warnings: list[SecurityWarningOut]
+    deferrals: list[SecurityDeferralOut]
 
 
 class OnboardingClaimRequest(BaseModel):

@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import html
+import hashlib
+import hmac
 import json
+import secrets
 from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlparse
 
-from fastapi import APIRouter, BackgroundTasks, Form, Request
+from fastapi import APIRouter, BackgroundTasks, Form, HTTPException, Request, status
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 
 from .config import get_settings
@@ -36,10 +39,12 @@ from .db import (
     get_scheduled_wake_job,
     get_user_by_id,
     get_user_by_username,
+    enable_user_mfa,
     list_discovery_candidates,
     list_discovery_events,
     list_discovery_runs,
     list_admin_audit_logs,
+    list_app_installations,
     list_device_memberships,
     list_hosts,
     list_power_check_logs,
@@ -62,10 +67,29 @@ from .db import (
 from .power import run_power_check
 from .password_policy import min_password_length_for_role
 from .rate_limit import get_rate_limiter
-from .request_context import get_request_ip, is_https_request
+from .request_context import (
+    AUTHENTICATED_TLS_REQUIRED_DETAIL,
+    LOGIN_TLS_REQUIRED_DETAIL,
+    get_request_ip,
+    is_auth_transport_allowed,
+    is_https_request,
+)
 from .scheduled_wakes import DAY_ORDER, compute_next_run_at_iso, normalize_schedule_definition, parse_days_of_week_json
-from .security import create_token, decode_token, hash_password, verify_password
-from .telemetry import get_counters
+from .security import (
+    build_totp_otpauth_uri,
+    create_state_token,
+    create_token,
+    decode_state_token,
+    decode_token,
+    decrypt_secret_value,
+    encrypt_secret_value,
+    generate_totp_secret,
+    hash_password,
+    verify_password,
+    verify_totp_code,
+)
+from .security_status import build_security_status
+from .telemetry import get_counters, get_recent_events, increment_counter, structured_log
 from .wol import normalize_mac, resolve_target, send_magic_packet
 
 router = APIRouter(prefix="/admin/ui", tags=["admin-ui"])
@@ -73,6 +97,203 @@ _STATIC_DIR = Path(__file__).with_name("static")
 _FAVICON_PATH = _STATIC_DIR / "favicon.png"
 
 _SUPPORTED_LANGS = {"en", "de"}
+_ADMIN_UI_COOKIE_PATH = "/admin/ui"
+_ADMIN_UI_SESSION_COOKIE = "admin_session"
+_ADMIN_UI_PENDING_COOKIE = "admin_pending_session"
+_ADMIN_UI_CSRF_COOKIE = "admin_ui_csrf"
+_ADMIN_UI_CSRF_FIELD = "csrf_token"
+_INVALID_CSRF_DETAIL = "Invalid CSRF token"
+_INVALID_ADMIN_UI_ORIGIN_DETAIL = "Admin UI POST origin is not allowed"
+_ADMIN_PENDING_STATE_TYPE = "admin_ui_pending"
+_ADMIN_PENDING_PURPOSE_VERIFY = "verify"
+_ADMIN_PENDING_PURPOSE_SETUP = "setup"
+
+
+def _security_ui_event(request: Request, *, counter: str, event: str, reason: str, **fields: object) -> None:
+    increment_counter(counter)
+    structured_log(
+        event,
+        reason=reason,
+        path=request.url.path,
+        method=request.method,
+        client_ip=get_request_ip(request, get_settings()) or "unknown",
+        **fields,
+    )
+
+
+def _default_port_for_scheme(scheme: str) -> int:
+    return 443 if scheme == "https" else 80
+
+
+def _normalize_origin_value(raw_value: str) -> tuple[str, str, int] | None:
+    try:
+        parsed = urlparse(raw_value)
+    except ValueError:
+        return None
+    scheme = parsed.scheme.lower()
+    if scheme not in {"http", "https"} or not parsed.hostname:
+        return None
+    try:
+        port = parsed.port
+    except ValueError:
+        return None
+    return (scheme, parsed.hostname.lower(), port or _default_port_for_scheme(scheme))
+
+
+def _expected_admin_origin(request: Request) -> tuple[str, str, int] | None:
+    settings = get_settings()
+    scheme = "https" if is_https_request(request, settings) else request.url.scheme.lower()
+    host = (request.headers.get("host") or request.url.netloc or "").strip()
+    if not host:
+        return None
+    return _normalize_origin_value(f"{scheme}://{host}")
+
+
+def _validate_admin_ui_post_origin(request: Request) -> None:
+    expected_origin = _expected_admin_origin(request)
+    if expected_origin is None:
+        _security_ui_event(
+            request,
+            counter="security.admin_ui.origin_failed",
+            event="security.admin_ui.origin_failed",
+            reason="missing_expected_origin",
+        )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=_INVALID_ADMIN_UI_ORIGIN_DETAIL)
+
+    origin = (request.headers.get("origin") or "").strip()
+    if origin:
+        if _normalize_origin_value(origin) != expected_origin:
+            _security_ui_event(
+                request,
+                counter="security.admin_ui.origin_failed",
+                event="security.admin_ui.origin_failed",
+                reason="origin_mismatch",
+                origin=origin,
+            )
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=_INVALID_ADMIN_UI_ORIGIN_DETAIL)
+        return
+
+    referer = (request.headers.get("referer") or "").strip()
+    if referer and _normalize_origin_value(referer) == expected_origin:
+        return
+
+    _security_ui_event(
+        request,
+        counter="security.admin_ui.origin_failed",
+        event="security.admin_ui.origin_failed",
+        reason="referer_mismatch",
+        referer=referer or None,
+    )
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=_INVALID_ADMIN_UI_ORIGIN_DETAIL)
+
+
+def _sign_csrf_nonce(nonce: str) -> str:
+    return hmac.new(
+        get_settings().app_secret.encode("utf-8"),
+        nonce.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def _build_csrf_token() -> str:
+    nonce = secrets.token_urlsafe(32)
+    return f"{nonce}.{_sign_csrf_nonce(nonce)}"
+
+
+def _is_valid_csrf_token(token: str | None) -> bool:
+    if not token:
+        return False
+    nonce, separator, signature = token.partition(".")
+    if not separator or not nonce or not signature:
+        return False
+    return hmac.compare_digest(signature, _sign_csrf_nonce(nonce))
+
+
+def _get_or_create_csrf_token(request: Request) -> str:
+    cached = getattr(request.state, "admin_ui_csrf_token", None)
+    if isinstance(cached, str) and _is_valid_csrf_token(cached):
+        return cached
+    cookie_token = (request.cookies.get(_ADMIN_UI_CSRF_COOKIE) or "").strip()
+    token = cookie_token if _is_valid_csrf_token(cookie_token) else _build_csrf_token()
+    request.state.admin_ui_csrf_token = token
+    return token
+
+
+def _apply_csrf_cookie(request: Request, response, *, rotate: bool = False) -> None:
+    existing_cookie = (request.cookies.get(_ADMIN_UI_CSRF_COOKIE) or "").strip()
+    if rotate:
+        token = _build_csrf_token()
+        request.state.admin_ui_csrf_token = token
+    else:
+        token = _get_or_create_csrf_token(request)
+        if existing_cookie == token:
+            return
+    response.set_cookie(
+        _ADMIN_UI_CSRF_COOKIE,
+        token,
+        httponly=True,
+        samesite="strict",
+        secure=is_https_request(request, get_settings()),
+        path=_ADMIN_UI_COOKIE_PATH,
+    )
+
+
+def _delete_csrf_cookie(response) -> None:
+    response.delete_cookie(_ADMIN_UI_CSRF_COOKIE, path=_ADMIN_UI_COOKIE_PATH)
+
+
+def _csrf_form_input(request: Request) -> str:
+    return (
+        f'<input type="hidden" name="{_ADMIN_UI_CSRF_FIELD}" '
+        f'value="{_esc(_get_or_create_csrf_token(request))}" />'
+    )
+
+
+async def enforce_admin_ui_post_request(request: Request) -> None:
+    settings = get_settings()
+    if request.url.path == "/admin/ui/login":
+        if not is_auth_transport_allowed(request, settings):
+            _security_ui_event(
+                request,
+                counter="security.transport_auth.blocked",
+                event="security.transport_auth.blocked",
+                reason="https_required",
+                detail=LOGIN_TLS_REQUIRED_DETAIL,
+            )
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=LOGIN_TLS_REQUIRED_DETAIL)
+    elif (_admin_from_cookie(request) or _pending_admin_from_cookie(request)) and not is_auth_transport_allowed(request, settings):
+        _security_ui_event(
+            request,
+            counter="security.transport_auth.blocked",
+            event="security.transport_auth.blocked",
+            reason="https_required",
+            detail=AUTHENTICATED_TLS_REQUIRED_DETAIL,
+        )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=AUTHENTICATED_TLS_REQUIRED_DETAIL)
+    _validate_admin_ui_post_origin(request)
+    request_body = (await request.body()).decode("utf-8", "replace")
+    submitted_value = ""
+    for key, value in parse_qsl(request_body, keep_blank_values=True):
+        if key == _ADMIN_UI_CSRF_FIELD:
+            submitted_value = value
+            break
+    expected_token = _get_or_create_csrf_token(request)
+    if not submitted_value or not _is_valid_csrf_token(submitted_value):
+        _security_ui_event(
+            request,
+            counter="security.admin_ui.csrf_failed",
+            event="security.admin_ui.csrf_failed",
+            reason="missing_or_invalid_token",
+        )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=_INVALID_CSRF_DETAIL)
+    if not hmac.compare_digest(submitted_value, expected_token):
+        _security_ui_event(
+            request,
+            counter="security.admin_ui.csrf_failed",
+            event="security.admin_ui.csrf_failed",
+            reason="token_mismatch",
+        )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=_INVALID_CSRF_DETAIL)
 
 _I18N = {
     "en": {
@@ -88,6 +309,7 @@ _I18N = {
         "nav_power_logs": "Power Logs",
         "nav_audit_logs": "Audit Logs",
         "nav_metrics": "Metrics",
+        "nav_mfa": "MFA",
         "nav_pilot_metrics": "Pilot Metrics",
         "nav_logout": "Logout",
         "signed_in_as": "Signed in as",
@@ -97,10 +319,19 @@ _I18N = {
         "title_admin_login": "Admin Login",
         "label_username": "Username",
         "label_password": "Password",
+        "label_totp_code": "Authenticator code",
         "action_login": "Login",
+        "action_verify_mfa": "Verify code",
+        "action_enable_mfa": "Enable MFA",
         "error_invalid_admin_credentials": "Invalid admin credentials",
         "error_too_many_login_attempts": "Too many login attempts. Please try again in a minute.",
+        "error_invalid_mfa_code": "Invalid authenticator code",
+        "error_too_many_mfa_attempts": "Too many MFA verification attempts. Please try again in a minute.",
+        "error_mfa_pending_expired": "MFA session expired. Please sign in again.",
         "title_admin_dashboard": "Admin Dashboard",
+        "title_admin_mfa": "Admin MFA",
+        "title_admin_mfa_verify": "Verify MFA",
+        "title_admin_mfa_setup": "Set up MFA",
         "title_users": "Users",
         "title_devices": "Devices",
         "title_scheduled_wakes": "Scheduled Wakes",
@@ -144,6 +375,8 @@ _I18N = {
         "heading_discovery_candidates": "Discovery Candidates",
         "heading_device_diagnostics_hints": "Device Diagnostics Hints",
         "heading_admin_audit_logs": "Admin Audit Logs",
+        "heading_mfa_status": "MFA Status",
+        "heading_mfa_setup": "Set Up Authenticator App",
         "heading_runtime_counters": "Runtime Counters",
         "heading_pilot_metrics": "Pilot Metrics",
         "col_id": "ID",
@@ -352,6 +585,17 @@ _I18N = {
         "error_discovery_disabled": "Discovery feature is disabled",
         "error_no_discovery_bindings": "No valid discovery source bindings available",
         "text_active_sender_bindings": "Active sender bindings",
+        "text_mfa_enabled": "MFA is enabled for this admin account.",
+        "text_mfa_not_enabled": "MFA is not enabled for this admin account yet.",
+        "text_mfa_required_rollout": "Browser admin logins now support staged TOTP rollout. When ADMIN_MFA_REQUIRED=true, non-enrolled admins are restricted to setup until MFA is enabled.",
+        "text_mfa_verify_intro": "Enter the current 6-digit code from your authenticator app to finish the admin browser login.",
+        "text_mfa_setup_intro": "Scan or enter this secret in an authenticator app, then submit the current 6-digit code to enable MFA.",
+        "text_mfa_recovery_hint": "Break-glass recovery: python -m app.cli admin-disable-mfa --username {username}",
+        "text_mfa_enabled_at": "Enabled at: {enabled_at}",
+        "label_mfa_issuer": "Issuer",
+        "label_mfa_account": "Account label",
+        "label_mfa_secret": "Manual secret",
+        "label_mfa_otpauth_uri": "otpauth URI",
         "label_import_mode": "Import mode",
         "option_auto_merge_by_mac": "auto merge by MAC",
         "option_create_new": "create new only",
@@ -374,6 +618,7 @@ _I18N = {
         "nav_power_logs": "Power-Logs",
         "nav_audit_logs": "Audit-Logs",
         "nav_metrics": "Metriken",
+        "nav_mfa": "MFA",
         "nav_pilot_metrics": "Pilot-Metriken",
         "nav_logout": "Abmelden",
         "signed_in_as": "Angemeldet als",
@@ -383,10 +628,19 @@ _I18N = {
         "title_admin_login": "Admin-Login",
         "label_username": "Benutzername",
         "label_password": "Passwort",
+        "label_totp_code": "Authenticator-Code",
         "action_login": "Anmelden",
+        "action_verify_mfa": "Code prüfen",
+        "action_enable_mfa": "MFA aktivieren",
         "error_invalid_admin_credentials": "Ungültige Admin-Zugangsdaten",
         "error_too_many_login_attempts": "Zu viele Login-Versuche. Bitte in einer Minute erneut versuchen.",
+        "error_invalid_mfa_code": "Ungültiger Authenticator-Code",
+        "error_too_many_mfa_attempts": "Zu viele MFA-Prüfversuche. Bitte in einer Minute erneut versuchen.",
+        "error_mfa_pending_expired": "Die MFA-Sitzung ist abgelaufen. Bitte erneut anmelden.",
         "title_admin_dashboard": "Admin-Dashboard",
+        "title_admin_mfa": "Admin-MFA",
+        "title_admin_mfa_verify": "MFA prüfen",
+        "title_admin_mfa_setup": "MFA einrichten",
         "title_users": "Benutzer",
         "title_devices": "Geräte",
         "title_scheduled_wakes": "Geplante Wakes",
@@ -430,6 +684,8 @@ _I18N = {
         "heading_discovery_candidates": "Discovery-Kandidaten",
         "heading_device_diagnostics_hints": "Diagnosehinweise für Geräte",
         "heading_admin_audit_logs": "Admin-Audit-Logs",
+        "heading_mfa_status": "MFA-Status",
+        "heading_mfa_setup": "Authenticator-App einrichten",
         "heading_runtime_counters": "Laufzeit-Zähler",
         "heading_pilot_metrics": "Pilot-Metriken",
         "col_id": "ID",
@@ -638,6 +894,17 @@ _I18N = {
         "error_discovery_disabled": "Discovery-Funktion ist deaktiviert",
         "error_no_discovery_bindings": "Keine gültigen Discovery-Quellbindungen verfügbar",
         "text_active_sender_bindings": "Aktive Sender-Bindings",
+        "text_mfa_enabled": "MFA ist für dieses Admin-Konto aktiviert.",
+        "text_mfa_not_enabled": "MFA ist für dieses Admin-Konto noch nicht aktiviert.",
+        "text_mfa_required_rollout": "Browser-Admin-Logins unterstützen jetzt einen gestuften TOTP-Rollout. Wenn ADMIN_MFA_REQUIRED=true gesetzt ist, bleiben nicht eingerichtete Admins auf den Setup-Flow beschränkt, bis MFA aktiviert wurde.",
+        "text_mfa_verify_intro": "Gib den aktuellen 6-stelligen Code aus deiner Authenticator-App ein, um den Browser-Login abzuschließen.",
+        "text_mfa_setup_intro": "Scanne oder übernimm dieses Secret in eine Authenticator-App und bestätige danach mit dem aktuellen 6-stelligen Code die Aktivierung von MFA.",
+        "text_mfa_recovery_hint": "Break-Glass-Recovery: python -m app.cli admin-disable-mfa --username {username}",
+        "text_mfa_enabled_at": "Aktiviert am: {enabled_at}",
+        "label_mfa_issuer": "Issuer",
+        "label_mfa_account": "Account-Label",
+        "label_mfa_secret": "Manuelles Secret",
+        "label_mfa_otpauth_uri": "otpauth-URI",
         "label_import_mode": "Import-Modus",
         "option_auto_merge_by_mac": "Automatisch per MAC zusammenführen",
         "option_create_new": "Nur neu erstellen",
@@ -893,6 +1160,7 @@ def _scheduled_wake_form_body(
     return_to: str,
 ) -> str:
     t = lambda key, **kwargs: _tr(request, key, **kwargs)
+    csrf_input = _csrf_form_input(request)
     device_options = "".join(
         f'<option value="{_esc(row["id"])}" {"selected" if str(values.get("device_id") or "") == str(row["id"]) else ""}>'
         f'{_esc(_device_display_label(dict(row)))}</option>'
@@ -909,6 +1177,7 @@ def _scheduled_wake_form_body(
     <article>
       <h2>{_esc(title)}</h2>
       <form method="post" action="{_esc(action_path)}" style="display:grid;gap:12px;max-width:760px;">
+        {csrf_input}
         <input type="hidden" name="return_to" value="{_esc(return_to)}" />
         <label class="stacked-cell">{t("col_device")}
           <select name="device_id" required>{device_options}</select>
@@ -949,6 +1218,149 @@ def _safe_next_path(next_path: str | None) -> str:
     return candidate
 
 
+def _is_user_mfa_enabled(user: dict | None) -> bool:
+    if not user:
+        return False
+    return bool(user["mfa_enabled"]) and bool(str(user["mfa_totp_secret_encrypted"] or "").strip())
+
+
+def _pending_state_path(pending_state: dict[str, object]) -> str:
+    purpose = str(pending_state.get("purpose") or "")
+    return "/admin/ui/mfa/setup" if purpose == _ADMIN_PENDING_PURPOSE_SETUP else "/admin/ui/mfa/verify"
+
+
+def _pending_redirect(request: Request, pending_state: dict[str, object]) -> RedirectResponse:
+    return RedirectResponse(
+        _with_lang(_pending_state_path(pending_state), _lang(request)),
+        status_code=303,
+    )
+
+
+def _set_admin_cookie(request: Request, response: RedirectResponse, name: str, value: str) -> None:
+    response.set_cookie(
+        name,
+        value,
+        httponly=True,
+        samesite="strict",
+        secure=is_https_request(request, get_settings()),
+        path=_ADMIN_UI_COOKIE_PATH,
+    )
+
+
+def _delete_admin_cookie(response: RedirectResponse, name: str) -> None:
+    response.delete_cookie(name, path=_ADMIN_UI_COOKIE_PATH)
+
+
+def _build_pending_admin_state(
+    user: dict,
+    *,
+    purpose: str,
+    next_path: str,
+    encrypted_secret: str | None = None,
+) -> str:
+    extra_claims: dict[str, object] = {
+        "ver": int(user["token_version"] or 0),
+        "purpose": purpose,
+        "next": _safe_next_path(next_path),
+    }
+    if encrypted_secret:
+        extra_claims["pending_secret"] = encrypted_secret
+    return create_state_token(
+        subject=str(user["username"]),
+        state_type=_ADMIN_PENDING_STATE_TYPE,
+        expires_seconds=get_settings().admin_mfa_pending_expires_seconds,
+        extra_claims=extra_claims,
+    )
+
+
+def _pending_admin_from_cookie(request: Request) -> dict[str, object] | None:
+    token = request.cookies.get(_ADMIN_UI_PENDING_COOKIE)
+    if not token:
+        return None
+    try:
+        payload = decode_state_token(token, expected_type=_ADMIN_PENDING_STATE_TYPE)
+    except Exception:
+        return None
+    username = str(payload.get("sub") or "")
+    user = get_user_by_username(username)
+    if not user or user["role"] != "admin":
+        return None
+    try:
+        payload_version = int(payload.get("ver", 0))
+    except (TypeError, ValueError):
+        return None
+    if payload_version != int(user["token_version"] or 0):
+        return None
+    purpose = str(payload.get("purpose") or "")
+    if purpose not in {_ADMIN_PENDING_PURPOSE_VERIFY, _ADMIN_PENDING_PURPOSE_SETUP}:
+        return None
+    pending_secret = payload.get("pending_secret")
+    return {
+        "user": user,
+        "purpose": purpose,
+        "next": _safe_next_path(str(payload.get("next") or "/admin/ui")),
+        "pending_secret": str(pending_secret) if isinstance(pending_secret, str) and pending_secret else None,
+    }
+
+
+def _issue_full_admin_session_response(
+    request: Request,
+    *,
+    user: dict,
+    next_path: str,
+    lang: str,
+    message: str | None = None,
+) -> RedirectResponse:
+    token, _ = create_token(username=user["username"], role=user["role"], token_version=int(user["token_version"] or 0))
+    if message:
+        response = _redirect(next_path, message=message, request=request)
+    else:
+        response = RedirectResponse(_safe_next_path(next_path), status_code=303)
+    _set_admin_cookie(request, response, _ADMIN_UI_SESSION_COOKIE, token)
+    _delete_admin_cookie(response, _ADMIN_UI_PENDING_COOKIE)
+    _apply_csrf_cookie(request, response, rotate=True)
+    _apply_lang_cookie(request, response, lang)
+    return response
+
+
+def _clear_pending_admin_state(response: RedirectResponse) -> None:
+    _delete_admin_cookie(response, _ADMIN_UI_PENDING_COOKIE)
+
+
+def _redirect_to_login(request: Request, *, error: str | None = None, next_path: str | None = None) -> RedirectResponse:
+    params = {"next": _safe_next_path(next_path), "lang": _lang(request)}
+    if error:
+        params["error"] = error
+    response = RedirectResponse(f"/admin/ui/login?{urlencode(params)}", status_code=303)
+    _clear_pending_admin_state(response)
+    _apply_lang_cookie(request, response)
+    return response
+
+
+def _require_pending_admin(request: Request, *, purpose: str) -> dict[str, object] | RedirectResponse:
+    pending_state = _pending_admin_from_cookie(request)
+    if pending_state is None:
+        _security_ui_event(
+            request,
+            counter="security.admin_ui.mfa.pending_expired",
+            event="security.admin_ui.mfa.pending_expired",
+            reason="missing_or_expired_pending_state",
+        )
+        return _redirect_to_login(request, error=_tr(request, "error_mfa_pending_expired"), next_path=request.url.path)
+    if not is_auth_transport_allowed(request, get_settings()):
+        _security_ui_event(
+            request,
+            counter="security.transport_auth.blocked",
+            event="security.transport_auth.blocked",
+            reason="https_required",
+            detail=AUTHENTICATED_TLS_REQUIRED_DETAIL,
+        )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=AUTHENTICATED_TLS_REQUIRED_DETAIL)
+    if str(pending_state["purpose"]) != purpose:
+        return _pending_redirect(request, pending_state)
+    return pending_state
+
+
 def _login_ip_key(request: Request) -> str:
     return get_request_ip(request, get_settings()) or "unknown"
 
@@ -970,7 +1382,7 @@ def _record_failed_login_attempt(request: Request) -> None:
 
 
 def _admin_from_cookie(request: Request):
-    token = request.cookies.get("admin_session")
+    token = request.cookies.get(_ADMIN_UI_SESSION_COOKIE)
     if not token:
         return None
     try:
@@ -995,11 +1407,25 @@ def _admin_from_cookie(request: Request):
 def _require_admin_or_redirect(request: Request):
     user = _admin_from_cookie(request)
     if user:
+        if not is_auth_transport_allowed(request, get_settings()):
+            _security_ui_event(
+                request,
+                counter="security.transport_auth.blocked",
+                event="security.transport_auth.blocked",
+                reason="https_required",
+                detail=AUTHENTICATED_TLS_REQUIRED_DETAIL,
+            )
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=AUTHENTICATED_TLS_REQUIRED_DETAIL)
+        if get_settings().admin_mfa_required and not _is_user_mfa_enabled(user) and request.url.path != "/admin/ui/mfa":
+            return _redirect("/admin/ui/mfa", request=request)
         return user
+    pending_state = _pending_admin_from_cookie(request)
+    if pending_state:
+        return _pending_redirect(request, pending_state)
     next_path = request.url.path
     if request.url.query:
         next_path = f"{next_path}?{request.url.query}"
-    return RedirectResponse(f"/admin/ui/login?{urlencode({'next': next_path, 'lang': _lang(request)})}", status_code=303)
+    return _redirect_to_login(request, next_path=next_path)
 
 
 def _layout(request: Request, title: str, body: str, admin_username: str, message: str | None = None, error: str | None = None) -> HTMLResponse:
@@ -1036,6 +1462,7 @@ def _layout(request: Request, title: str, body: str, admin_username: str, messag
         {_nav('/admin/ui/diagnostics', t('nav_diagnostics'))}
         {_nav('/admin/ui/discovery', t('nav_discovery'))}
         {_nav('/admin/ui/metrics', t('nav_metrics'))}
+        {_nav('/admin/ui/mfa', t('nav_mfa'))}
       </nav>
       <div class="sidebar-footer">Admin Panel</div>
     </aside>"""
@@ -1252,6 +1679,7 @@ document.querySelectorAll('.flash-ok').forEach(function(el){
 </body>
 </html>"""
     response = HTMLResponse(page)
+    _apply_csrf_cookie(request, response)
     _apply_lang_cookie(request, response, lang)
     return response
 
@@ -1460,21 +1888,26 @@ def _import_discovery_candidate_ui(
     return resolved_target, effective_mode
 
 
-@router.get("/login", response_class=HTMLResponse)
-def login_page(request: Request, next: str = "/admin/ui", error: str | None = None):
-    user = _admin_from_cookie(request)
-    lang = _lang(request)
-    safe_next = _safe_next_path(next)
-    t = lambda key, **kwargs: _tr(request, key, **kwargs)
-    if user:
-        return RedirectResponse(safe_next, status_code=303)
-    error_html = f'<p class="login-error">{_esc(error)}</p>' if error else ""
+def _auth_card_page(
+    request: Request,
+    *,
+    title: str,
+    subtitle: str,
+    body: str,
+    error: str | None = None,
+    message: str | None = None,
+) -> HTMLResponse:
+    flashes = ""
+    if error:
+        flashes += f'<p class="login-error">{_esc(error)}</p>'
+    if message:
+        flashes += f'<p class="login-ok">{_esc(message)}</p>'
     page = f"""<!doctype html>
 <html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>{t("title_admin_login")}</title>
+  <title>{_esc(title)}</title>
   <link rel="icon" type="image/png" href="/admin/ui/favicon.png">
   <script>document.documentElement.dataset.theme=localStorage.getItem('wff-theme')||(window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light');</script>
   <style>
@@ -1483,20 +1916,25 @@ def login_page(request: Request, next: str = "/admin/ui", error: str | None = No
 *{{box-sizing:border-box}}
 html,body{{margin:0;padding:0}}
 body{{display:flex;align-items:center;justify-content:center;min-height:100vh;padding:1rem;font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--fg)}}
-.login-card{{width:100%;max-width:400px}}
-.login-card{{background:var(--card-bg);border:1px solid var(--card-border);border-radius:12px;padding:1.5rem;box-shadow:0 4px 24px rgba(0,0,0,.08)}}
+.login-card{{width:100%;max-width:520px;background:var(--card-bg);border:1px solid var(--card-border);border-radius:12px;padding:1.5rem;box-shadow:0 4px 24px rgba(0,0,0,.08)}}
 .login-brand{{text-align:center;margin-bottom:1.5rem}}
 .login-brand img{{width:48px;height:48px;margin-bottom:.5rem}}
 .login-brand h1{{font-size:1.5rem;margin:0}}
 .login-brand p{{color:var(--muted);font-size:.875rem;margin:.25rem 0 0}}
-.login-error{{color:#7b1a1a;background:#fef0f0;border:1px solid #e53535;border-left:4px solid #e53535;border-radius:8px;padding:.6rem .9rem;font-size:.875rem;margin-bottom:.75rem}}
+.login-error,.login-ok{{border-radius:8px;padding:.6rem .9rem;font-size:.875rem;margin-bottom:.75rem}}
+.login-error{{color:#7b1a1a;background:#fef0f0;border:1px solid #e53535;border-left:4px solid #e53535}}
+.login-ok{{color:#1a5e2e;background:#edfbf3;border:1px solid #22a55a;border-left:4px solid #22a55a}}
 label{{display:block;margin:.45rem 0 .2rem;font-size:.875rem;color:var(--muted)}}
-input{{width:100%;max-width:100%;padding:.5rem .6rem;border:1px solid var(--input-border);border-radius:8px;background:var(--input-bg);color:var(--input-fg);font:inherit;transition:border-color .2s,box-shadow .2s}}
+input,textarea{{width:100%;max-width:100%;padding:.5rem .6rem;border:1px solid var(--input-border);border-radius:8px;background:var(--input-bg);color:var(--input-fg);font:inherit;transition:border-color .2s,box-shadow .2s}}
+textarea{{min-height:104px;resize:vertical}}
 button{{margin-top:.65rem;width:100%;padding:.5rem .85rem;border:1px solid var(--btn-border);border-radius:8px;background:var(--btn-bg);color:#fff;cursor:pointer;font:inherit;transition:filter .15s}}
 button:hover{{filter:brightness(.9)}}
-input:focus{{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-subtle)}}
+input:focus,textarea:focus{{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-subtle)}}
 .lang-footer{{text-align:center;margin-top:1rem;font-size:.8rem;color:var(--muted)}}
 .lang-footer a{{color:inherit}}
+.stack{{display:grid;gap:.75rem}}
+.muted{{color:var(--muted);font-size:.875rem}}
+code{{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,Liberation Mono,monospace;font-size:.85em}}
   </style>
 </head>
 <body>
@@ -1504,28 +1942,52 @@ input:focus{{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--
     <div class="login-brand">
       <img src="/admin/ui/favicon.png" alt="" width="48" height="48" />
       <h1>WakeFromFar</h1>
-      <p>{t("title_admin_login")}</p>
+      <p>{_esc(subtitle)}</p>
     </div>
-    {error_html}
+    {flashes}
+    {body}
+    <div class="lang-footer">
+      <a href="{_esc(_lang_switch_url(request, 'en'))}">{_tr(request, "lang_en")}</a> |
+      <a href="{_esc(_lang_switch_url(request, 'de'))}">{_tr(request, "lang_de")}</a>
+    </div>
+  </article>
+</body>
+</html>"""
+    response = HTMLResponse(page)
+    _apply_csrf_cookie(request, response)
+    _apply_lang_cookie(request, response)
+    return response
+
+
+@router.get("/login", response_class=HTMLResponse)
+def login_page(request: Request, next: str = "/admin/ui", error: str | None = None):
+    user = _admin_from_cookie(request)
+    safe_next = _safe_next_path(next)
+    t = lambda key, **kwargs: _tr(request, key, **kwargs)
+    if user:
+        return RedirectResponse(safe_next, status_code=303)
+    pending_state = _pending_admin_from_cookie(request)
+    if pending_state:
+        return _pending_redirect(request, pending_state)
+    body = f"""
     <form method="post" action="/admin/ui/login" autocomplete="off">
+      {_csrf_form_input(request)}
       <input type="hidden" name="next" value="{_esc(safe_next)}" />
-      <input type="hidden" name="lang" value="{_esc(lang)}" />
+      <input type="hidden" name="lang" value="{_esc(_lang(request))}" />
       <label for="login-username">{t("label_username")}</label>
       <input id="login-username" required name="username" autocomplete="username" />
       <label for="login-password">{t("label_password")}</label>
       <input id="login-password" required type="password" name="password" autocomplete="current-password" />
       <button type="submit">{t("action_login")}</button>
     </form>
-    <div class="lang-footer">
-      <a href="{_esc(_lang_switch_url(request, 'en'))}">{t("lang_en")}</a> |
-      <a href="{_esc(_lang_switch_url(request, 'de'))}">{t("lang_de")}</a>
-    </div>
-  </article>
-</body>
-</html>"""
-    response = HTMLResponse(page)
-    _apply_lang_cookie(request, response, lang)
-    return response
+    """
+    return _auth_card_page(
+        request,
+        title=t("title_admin_login"),
+        subtitle=t("title_admin_login"),
+        body=body,
+        error=error,
+    )
 
 
 @router.post("/login")
@@ -1536,6 +1998,15 @@ def login_submit(
     next: str = Form("/admin/ui"),
     lang: str = Form(""),
 ):
+    if not is_auth_transport_allowed(request, get_settings()):
+        _security_ui_event(
+            request,
+            counter="security.transport_auth.blocked",
+            event="security.transport_auth.blocked",
+            reason="https_required",
+            detail=LOGIN_TLS_REQUIRED_DETAIL,
+        )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=LOGIN_TLS_REQUIRED_DETAIL)
     resolved_lang = lang if lang in _SUPPORTED_LANGS else _lang(request)
     safe_next = _safe_next_path(next)
     if _is_login_rate_limited(request):
@@ -1552,26 +2023,320 @@ def login_submit(
             f"/admin/ui/login?{urlencode({'next': safe_next, 'error': error_message, 'lang': resolved_lang})}",
             status_code=303,
         )
-    token, _ = create_token(username=user["username"], role=user["role"], token_version=int(user["token_version"] or 0))
-    response = RedirectResponse(safe_next, status_code=303)
-    response.set_cookie(
-        "admin_session",
-        token,
-        httponly=True,
-        samesite="strict",
-        secure=is_https_request(request, get_settings()),
-        path="/admin/ui",
+    settings = get_settings()
+    if _is_user_mfa_enabled(user):
+        _security_ui_event(
+            request,
+            counter="security.admin_ui.mfa.verify_started",
+            event="security.admin_ui.mfa.verify_started",
+            reason="mfa_enabled_admin_login",
+            username=str(user["username"]),
+        )
+        pending_token = _build_pending_admin_state(
+            user,
+            purpose=_ADMIN_PENDING_PURPOSE_VERIFY,
+            next_path=safe_next,
+        )
+        response = RedirectResponse(_with_lang("/admin/ui/mfa/verify", resolved_lang), status_code=303)
+        _set_admin_cookie(request, response, _ADMIN_UI_PENDING_COOKIE, pending_token)
+        _apply_csrf_cookie(request, response, rotate=True)
+        _apply_lang_cookie(request, response, resolved_lang)
+        return response
+    if settings.admin_mfa_required:
+        _security_ui_event(
+            request,
+            counter="security.admin_ui.mfa.setup_started",
+            event="security.admin_ui.mfa.setup_started",
+            reason="mfa_required_admin_login",
+            username=str(user["username"]),
+        )
+        pending_token = _build_pending_admin_state(
+            user,
+            purpose=_ADMIN_PENDING_PURPOSE_SETUP,
+            next_path=safe_next,
+            encrypted_secret=encrypt_secret_value(generate_totp_secret()),
+        )
+        response = RedirectResponse(_with_lang("/admin/ui/mfa/setup", resolved_lang), status_code=303)
+        _set_admin_cookie(request, response, _ADMIN_UI_PENDING_COOKIE, pending_token)
+        _apply_csrf_cookie(request, response, rotate=True)
+        _apply_lang_cookie(request, response, resolved_lang)
+        return response
+    return _issue_full_admin_session_response(
+        request,
+        user=user,
+        next_path=safe_next,
+        lang=resolved_lang,
     )
-    _apply_lang_cookie(request, response, resolved_lang)
-    return response
 
 
 @router.get("/logout")
 def logout(request: Request):
     response = RedirectResponse(_with_lang("/admin/ui/login", _lang(request)), status_code=303)
-    response.delete_cookie("admin_session", path="/admin/ui")
+    _delete_admin_cookie(response, _ADMIN_UI_SESSION_COOKIE)
+    _delete_admin_cookie(response, _ADMIN_UI_PENDING_COOKIE)
+    _delete_csrf_cookie(response)
     _apply_lang_cookie(request, response)
     return response
+
+
+def _mfa_rate_limit_key(request: Request, username: str) -> str:
+    return f"{username}:{_login_ip_key(request)}"
+
+
+def _mfa_verify_limited(request: Request, username: str) -> bool:
+    settings = get_settings()
+    return get_rate_limiter().check_and_record(
+        scope="admin_ui_mfa_verify",
+        key=_mfa_rate_limit_key(request, username),
+        limit=settings.admin_mfa_verify_rate_limit_per_minute,
+        window_seconds=60,
+    )
+
+
+def _mfa_setup_body(request: Request, *, username: str, encrypted_secret: str, submit_path: str) -> str:
+    t = lambda key, **kwargs: _tr(request, key, **kwargs)
+    secret = decrypt_secret_value(encrypted_secret)
+    issuer = get_settings().admin_mfa_issuer
+    otpauth_uri = build_totp_otpauth_uri(secret=secret, issuer=issuer, account_name=username)
+    return f"""
+    <div class="stack">
+      <p class="muted">{t("text_mfa_setup_intro")}</p>
+      <p class="muted">{t("text_mfa_required_rollout")}</p>
+      <label>{t("label_mfa_issuer")}<input value="{_esc(issuer)}" readonly /></label>
+      <label>{t("label_mfa_account")}<input value="{_esc(username)}" readonly /></label>
+      <label>{t("label_mfa_secret")}<input value="{_esc(secret)}" readonly /></label>
+      <label>{t("label_mfa_otpauth_uri")}<textarea readonly>{_esc(otpauth_uri)}</textarea></label>
+      <form method="post" action="{_esc(submit_path)}" autocomplete="off">
+        {_csrf_form_input(request)}
+        <input type="hidden" name="encrypted_secret" value="{_esc(encrypted_secret)}" />
+        <label for="mfa-code">{t("label_totp_code")}</label>
+        <input id="mfa-code" required name="code" inputmode="numeric" pattern="[0-9]*" autocomplete="one-time-code" maxlength="6" />
+        <button type="submit">{t("action_enable_mfa")}</button>
+      </form>
+    </div>
+    """
+
+
+@router.get("/mfa", response_class=HTMLResponse)
+def mfa_page(request: Request):
+    user = _require_admin_or_redirect(request)
+    if isinstance(user, RedirectResponse):
+        return user
+    t = lambda key, **kwargs: _tr(request, key, **kwargs)
+    message, error = _msg(request)
+    if _is_user_mfa_enabled(user):
+        body = f"""
+        <article>
+          <h2>{t("heading_mfa_status")}</h2>
+          <p>{t("text_mfa_enabled")}</p>
+          <p class="muted">{t("text_mfa_enabled_at", enabled_at=str(user["mfa_enabled_at"] or "unknown"))}</p>
+          <p class="muted">{t("text_mfa_recovery_hint", username=str(user["username"]))}</p>
+        </article>
+        """
+    else:
+        body = f"""
+        <article>
+          <h2>{t("heading_mfa_status")}</h2>
+          <p>{t("text_mfa_not_enabled")}</p>
+        </article>
+        <article>
+          <h2>{t("heading_mfa_setup")}</h2>
+          {_mfa_setup_body(
+              request,
+              username=str(user["username"]),
+              encrypted_secret=encrypt_secret_value(generate_totp_secret()),
+              submit_path="/admin/ui/mfa/setup",
+          )}
+        </article>
+        """
+    return _layout(
+        request,
+        t("title_admin_mfa"),
+        body,
+        str(user["username"]),
+        message=message,
+        error=error,
+    )
+
+
+@router.get("/mfa/verify", response_class=HTMLResponse)
+def mfa_verify_page(request: Request, error: str | None = None):
+    pending_state = _require_pending_admin(request, purpose=_ADMIN_PENDING_PURPOSE_VERIFY)
+    if isinstance(pending_state, RedirectResponse):
+        return pending_state
+    t = lambda key, **kwargs: _tr(request, key, **kwargs)
+    body = f"""
+    <div class="stack">
+      <p class="muted">{t("text_mfa_verify_intro")}</p>
+      <form method="post" action="/admin/ui/mfa/verify" autocomplete="off">
+        {_csrf_form_input(request)}
+        <label for="verify-code">{t("label_totp_code")}</label>
+        <input id="verify-code" required name="code" inputmode="numeric" pattern="[0-9]*" autocomplete="one-time-code" maxlength="6" />
+        <button type="submit">{t("action_verify_mfa")}</button>
+      </form>
+    </div>
+    """
+    return _auth_card_page(
+        request,
+        title=t("title_admin_mfa_verify"),
+        subtitle=t("title_admin_mfa_verify"),
+        body=body,
+        error=error,
+    )
+
+
+@router.post("/mfa/verify")
+def mfa_verify_submit(request: Request, code: str = Form(...)):
+    pending_state = _require_pending_admin(request, purpose=_ADMIN_PENDING_PURPOSE_VERIFY)
+    if isinstance(pending_state, RedirectResponse):
+        return pending_state
+    user = pending_state["user"]
+    if _mfa_verify_limited(request, str(user["username"])):
+        _security_ui_event(
+            request,
+            counter="security.admin_ui.mfa.verify_failed",
+            event="security.admin_ui.mfa.verify_failed",
+            reason="rate_limited",
+            username=str(user["username"]),
+        )
+        return RedirectResponse(
+            f"/admin/ui/mfa/verify?{urlencode({'error': _tr(request, 'error_too_many_mfa_attempts'), 'lang': _lang(request)})}",
+            status_code=303,
+        )
+    encrypted_secret = str(user["mfa_totp_secret_encrypted"] or "")
+    if not encrypted_secret or not verify_totp_code(decrypt_secret_value(encrypted_secret), code):
+        _security_ui_event(
+            request,
+            counter="security.admin_ui.mfa.verify_failed",
+            event="security.admin_ui.mfa.verify_failed",
+            reason="invalid_code",
+            username=str(user["username"]),
+        )
+        return RedirectResponse(
+            f"/admin/ui/mfa/verify?{urlencode({'error': _tr(request, 'error_invalid_mfa_code'), 'lang': _lang(request)})}",
+            status_code=303,
+        )
+    _security_ui_event(
+        request,
+        counter="security.admin_ui.mfa.verify_success",
+        event="security.admin_ui.mfa.verify_success",
+        reason="valid_code",
+        username=str(user["username"]),
+    )
+    return _issue_full_admin_session_response(
+        request,
+        user=user,
+        next_path=str(pending_state["next"]),
+        lang=_lang(request),
+    )
+
+
+@router.get("/mfa/setup", response_class=HTMLResponse)
+def mfa_setup_page(request: Request, error: str | None = None):
+    authenticated_user = _admin_from_cookie(request)
+    if authenticated_user:
+        if _is_user_mfa_enabled(authenticated_user):
+            return _redirect("/admin/ui/mfa", request=request)
+        body = _mfa_setup_body(
+            request,
+            username=str(authenticated_user["username"]),
+            encrypted_secret=encrypt_secret_value(generate_totp_secret()),
+            submit_path="/admin/ui/mfa/setup",
+        )
+        return _auth_card_page(
+            request,
+            title=_tr(request, "title_admin_mfa_setup"),
+            subtitle=_tr(request, "title_admin_mfa_setup"),
+            body=body,
+            error=error,
+        )
+
+    pending_state = _require_pending_admin(request, purpose=_ADMIN_PENDING_PURPOSE_SETUP)
+    if isinstance(pending_state, RedirectResponse):
+        return pending_state
+    encrypted_secret = str(pending_state["pending_secret"] or "")
+    if not encrypted_secret:
+        return _redirect_to_login(request, error=_tr(request, "error_mfa_pending_expired"), next_path="/admin/ui/login")
+    body = _mfa_setup_body(
+        request,
+        username=str(pending_state["user"]["username"]),
+        encrypted_secret=encrypted_secret,
+        submit_path="/admin/ui/mfa/setup",
+    )
+    return _auth_card_page(
+        request,
+        title=_tr(request, "title_admin_mfa_setup"),
+        subtitle=_tr(request, "title_admin_mfa_setup"),
+        body=body,
+        error=error,
+    )
+
+
+@router.post("/mfa/setup")
+def mfa_setup_submit(
+    request: Request,
+    encrypted_secret: str = Form(...),
+    code: str = Form(...),
+):
+    authenticated_user = _admin_from_cookie(request)
+    pending_state: dict[str, object] | None = None
+    if authenticated_user:
+        user = authenticated_user
+    else:
+        pending_result = _require_pending_admin(request, purpose=_ADMIN_PENDING_PURPOSE_SETUP)
+        if isinstance(pending_result, RedirectResponse):
+            return pending_result
+        pending_state = pending_result
+        user = pending_result["user"]
+
+    if _is_user_mfa_enabled(user):
+        return _redirect("/admin/ui/mfa", request=request)
+    if _mfa_verify_limited(request, str(user["username"])):
+        _security_ui_event(
+            request,
+            counter="security.admin_ui.mfa.verify_failed",
+            event="security.admin_ui.mfa.verify_failed",
+            reason="setup_rate_limited",
+            username=str(user["username"]),
+        )
+        return RedirectResponse(
+            f"/admin/ui/mfa/setup?{urlencode({'error': _tr(request, 'error_too_many_mfa_attempts'), 'lang': _lang(request)})}",
+            status_code=303,
+        )
+    secret = decrypt_secret_value(encrypted_secret)
+    if not verify_totp_code(secret, code):
+        _security_ui_event(
+            request,
+            counter="security.admin_ui.mfa.verify_failed",
+            event="security.admin_ui.mfa.verify_failed",
+            reason="setup_invalid_code",
+            username=str(user["username"]),
+        )
+        return RedirectResponse(
+            f"/admin/ui/mfa/setup?{urlencode({'error': _tr(request, 'error_invalid_mfa_code'), 'lang': _lang(request)})}",
+            status_code=303,
+        )
+    enable_user_mfa(int(user["id"]), encrypt_secret_value(secret))
+    log_admin_action(str(user["username"]), "enable_mfa", "user", str(user["id"]), "totp")
+    _security_ui_event(
+        request,
+        counter="security.admin_ui.mfa.setup_completed",
+        event="security.admin_ui.mfa.setup_completed",
+        reason="valid_code",
+        username=str(user["username"]),
+    )
+    refreshed_user = get_user_by_username(str(user["username"]))
+    if refreshed_user is None:
+        return _redirect_to_login(request, error=_tr(request, "error_mfa_pending_expired"))
+    if pending_state is not None:
+        return _issue_full_admin_session_response(
+            request,
+            user=refreshed_user,
+            next_path=str(pending_state["next"]),
+            lang=_lang(request),
+            message=_tr(request, "text_mfa_enabled"),
+        )
+    return _redirect("/admin/ui/mfa", message=_tr(request, "text_mfa_enabled"), request=request)
 
 
 @router.get("", response_class=HTMLResponse)
@@ -1580,6 +2345,7 @@ def dashboard(request: Request):
     if isinstance(user, RedirectResponse):
         return user
     t = lambda key, **kwargs: _tr(request, key, **kwargs)
+    csrf_input = _csrf_form_input(request)
     users = list_users()
     devices = list_hosts()
     scheduled_wakes = list_scheduled_wake_jobs(limit=200)
@@ -1593,6 +2359,7 @@ def dashboard(request: Request):
     if selected_run_id:
         bulk_form = f"""
     <form method="post" action="/admin/ui/discovery/runs/{_esc(selected_run_id)}/import-bulk" class="form-inline" style="margin-bottom:.8rem;">
+      {csrf_input}
       <label>{t("label_import_mode")}
         <select name="mode">
           <option value="auto_merge_by_mac">{t("option_auto_merge_by_mac")}</option>
@@ -1635,6 +2402,7 @@ def users_page(request: Request):
     if isinstance(user, RedirectResponse):
         return user
     t = lambda key, **kwargs: _tr(request, key, **kwargs)
+    csrf_input = _csrf_form_input(request)
     rows = list_users()
     message, error = _msg(request)
     table_rows = "".join(
@@ -1643,6 +2411,7 @@ def users_page(request: Request):
           <td>{_short_id(row['id'])}</td><td>{_esc(row['username'])}</td><td>{_badge(str(row['role']))}</td><td>{_esc(row['created_at'])}</td>
           <td>
             <form method="post" action="/admin/ui/users/{row['id']}/update" class="form-inline">
+              {csrf_input}
               <select name="role">
                 <option value="user" {"selected" if row['role']=="user" else ""}>user</option>
                 <option value="admin" {"selected" if row['role']=="admin" else ""}>admin</option>
@@ -1653,6 +2422,7 @@ def users_page(request: Request):
           </td>
           <td>
             <form method="post" action="/admin/ui/users/{row['id']}/delete" data-confirm="{_esc(t('confirm_delete_user', username=str(row['username'])))}">
+              {csrf_input}
               <button type="submit" class="btn-danger btn-sm">{t("action_delete")}</button>
             </form>
           </td>
@@ -1664,6 +2434,7 @@ def users_page(request: Request):
     <article>
     <h2>{t("heading_create_user")}</h2>
     <form method="post" action="/admin/ui/users/create" autocomplete="off" class="form-inline">
+      {csrf_input}
       <input required name="username" placeholder="{t("placeholder_username")}" />
       <input required name="password" type="password" placeholder="{t("placeholder_password_min12")}" />
       <select name="role"><option value="user">user</option><option value="admin">admin</option></select>
@@ -1764,6 +2535,7 @@ def devices_page(request: Request):
     if isinstance(admin, RedirectResponse):
         return admin
     t = lambda key, **kwargs: _tr(request, key, **kwargs)
+    csrf_input = _csrf_form_input(request)
     rows = list_hosts()
     message, error = _msg(request)
     table_rows = "".join(
@@ -1783,14 +2555,15 @@ def devices_page(request: Request):
           <td>
             <div style="display:flex;gap:4px;flex-wrap:wrap">
               <button type="button" class="secondary btn-sm" onclick="toggleEdit('{_esc(row['id'])}')">{t("action_edit")}</button>
-              <form method="post" action="/admin/ui/devices/{_esc(row['id'])}/test-power-check" style="display:inline"><button type="submit" class="secondary btn-sm">{t("action_test_power_check")}</button></form>
-              <form method="post" action="/admin/ui/devices/{_esc(row['id'])}/delete" data-confirm="{_esc(t('confirm_delete_device', device=str(row['name'])))}" style="display:inline"><button type="submit" class="btn-danger btn-sm">{t("action_delete")}</button></form>
+              <form method="post" action="/admin/ui/devices/{_esc(row['id'])}/test-power-check" style="display:inline">{csrf_input}<button type="submit" class="secondary btn-sm">{t("action_test_power_check")}</button></form>
+              <form method="post" action="/admin/ui/devices/{_esc(row['id'])}/delete" data-confirm="{_esc(t('confirm_delete_device', device=str(row['name'])))}" style="display:inline">{csrf_input}<button type="submit" class="btn-danger btn-sm">{t("action_delete")}</button></form>
             </div>
           </td>
         </tr>
         <tr class="edit-row" id="edit-{_esc(row['id'])}" style="display:none">
           <td colspan="12">
             <form method="post" action="/admin/ui/devices/{_esc(row['id'])}/update" class="form-grid form-grid-3">
+              {csrf_input}
               <label>{t("col_name")}<input name="name" value="{_esc(row['name'])}" /></label>
               <label>{t("col_display")}<input name="display_name" value="{_esc(row['display_name'])}" placeholder="{t("placeholder_display_name")}" /></label>
               <label>{t("col_mac")}<input name="mac" value="{_esc(row['mac'])}" /></label>
@@ -1814,6 +2587,7 @@ def devices_page(request: Request):
     <article>
     <h2>{t("heading_create_device")}</h2>
     <form method="post" action="/admin/ui/devices/create" autocomplete="off" class="form-grid form-grid-4">
+      {csrf_input}
       <input required name="name" placeholder="{t("placeholder_name")}" />
       <input name="display_name" placeholder="{t("placeholder_display_name")}" />
       <input required name="mac" placeholder="AA:BB:CC:DD:EE:FF" />
@@ -2014,6 +2788,7 @@ def scheduled_wakes_page(
     if isinstance(admin, RedirectResponse):
         return admin
     t = lambda key, **kwargs: _tr(request, key, **kwargs)
+    csrf_input = _csrf_form_input(request)
     selected_device_id = (device_id or "").strip()
     enabled_filter = enabled if enabled in {"all", "enabled", "disabled"} else "all"
     enabled_value = None if enabled_filter == "all" else enabled_filter == "enabled"
@@ -2052,10 +2827,12 @@ def scheduled_wakes_page(
             <div class="stacked-cell">
               <a href="{_esc(_with_lang(f"/admin/ui/scheduled-wakes/{row['id']}/edit", _lang(request)))}">{t("action_edit")}</a>
               <form method="post" action="/admin/ui/scheduled-wakes/{_esc(row['id'])}/toggle">
+                {csrf_input}
                 <input type="hidden" name="return_to" value="{_esc(_schedule_filter_path(request, device_id=selected_device_id or None, enabled=enabled_filter))}" />
                 <button type="submit" class="{"btn-toggle-on" if row["enabled"] else "btn-toggle-off"}">{t("action_disable") if row['enabled'] else t("action_enable")}</button>
               </form>
               <form method="post" action="/admin/ui/scheduled-wakes/{_esc(row['id'])}/delete" data-confirm="{_esc(t('confirm_delete_schedule', label=str(row['label'])))}">
+                {csrf_input}
                 <input type="hidden" name="return_to" value="{_esc(_schedule_filter_path(request, device_id=selected_device_id or None, enabled=enabled_filter))}" />
                 <button type="submit" class="btn-danger">{t("action_delete")}</button>
               </form>
@@ -2379,6 +3156,7 @@ def device_memberships_page(request: Request):
     if isinstance(admin, RedirectResponse):
         return admin
     t = lambda key, **kwargs: _tr(request, key, **kwargs)
+    csrf_input = _csrf_form_input(request)
     users = list_users()
     devices = list_hosts()
     memberships = list_device_memberships()
@@ -2416,6 +3194,7 @@ def device_memberships_page(request: Request):
           <td>{_esc(row['updated_at'])}</td>
           <td>
             <form method="post" action="/admin/ui/device-memberships/{_esc(row['id'])}/update">
+              {csrf_input}
               <div class="membership-permissions">
                 <label class="checkbox-item"><input type="checkbox" name="can_view_status" value="1" {_checkbox_checked(row['can_view_status'])} /> {t("label_can_view_status")}</label>
                 <label class="checkbox-item"><input type="checkbox" name="can_wake" value="1" {_checkbox_checked(row['can_wake'])} /> {t("label_can_wake")}</label>
@@ -2429,6 +3208,7 @@ def device_memberships_page(request: Request):
           </td>
           <td>
             <form method="post" action="/admin/ui/device-memberships/{_esc(row['id'])}/delete" data-confirm="{_esc(t('confirm_remove_device_access', username=str(row['username']), device=_device_membership_device_label(dict(row))))}">
+              {csrf_input}
               <button type="submit" class="btn-danger">{t("action_remove")}</button>
             </form>
           </td>
@@ -2440,6 +3220,7 @@ def device_memberships_page(request: Request):
     <article>
     <h2>{t("heading_grant_device_access")}</h2>
     <form method="post" action="/admin/ui/device-memberships/create" class="membership-create-form">
+      {csrf_input}
       <label class="stacked-cell">{t("col_user")}<select name="user_id">{user_opts}</select></label>
       <label class="stacked-cell">{t("col_device")}<select name="device_id">{device_opts}</select></label>
       <div class="checkbox-group" style="grid-column:1 / -1;">
@@ -2862,6 +3643,7 @@ def discovery_page(request: Request, run_id: str = "", show_docker: str = ""):
     if isinstance(admin, RedirectResponse):
         return admin
     t = lambda key, **kwargs: _tr(request, key, **kwargs)
+    csrf_input = _csrf_form_input(request)
     settings = get_settings()
     if not settings.discovery_enabled:
         body = f"<article><p>{t('error_discovery_disabled')}</p></article>"
@@ -2909,6 +3691,7 @@ def discovery_page(request: Request, run_id: str = "", show_docker: str = ""):
         if suggested and not row["imported_host_id"]:
             suggested_action = (
                 f'<form method="post" action="/admin/ui/discovery/candidates/{_esc(row["id"])}/import" style="display:inline;">'
+                f"{csrf_input}"
                 '<input type="hidden" name="mode" value="auto_merge_by_mac" />'
                 '<input type="hidden" name="apply_power_settings" value="1" />'
                 f'<button type="submit" class="secondary">{t("action_merge_suggested")}</button>'
@@ -2928,9 +3711,11 @@ def discovery_page(request: Request, run_id: str = "", show_docker: str = ""):
               <td>
                 {suggested_action}
                 <form method="post" action="/admin/ui/discovery/candidates/{_esc(row['id'])}/validate-wake" style="display:inline;">
+                  {csrf_input}
                   <button type="submit" class="secondary">{t("action_validate_wake")}</button>
                 </form>
                 <form method="post" action="/admin/ui/discovery/candidates/{_esc(row['id'])}/import" style="display:inline-flex;gap:6px;align-items:center;">
+                  {csrf_input}
                   <input name="mode" type="hidden" value="create_new" />
                   <input name="apply_power_settings" type="hidden" value="1" />
                   <input name="name" placeholder="{t("placeholder_name")}" style="max-width:180px" />
@@ -2953,6 +3738,7 @@ def discovery_page(request: Request, run_id: str = "", show_docker: str = ""):
     if selected_run_id:
         bulk_form = f"""
     <form method="post" action="/admin/ui/discovery/runs/{_esc(selected_run_id)}/import-bulk" class="form-inline" style="margin-bottom:.8rem;">
+      {csrf_input}
       <label>{t("label_import_mode")}
         <select name="mode">
           <option value="auto_merge_by_mac">{t("option_auto_merge_by_mac")}</option>
@@ -2971,6 +3757,7 @@ def discovery_page(request: Request, run_id: str = "", show_docker: str = ""):
     <h2>{t("heading_discovery_scan")}</h2>
     <p>{t("text_active_sender_bindings")}: <strong>{binding_text}</strong></p>
     <form method="post" action="/admin/ui/discovery/run" class="form-grid form-grid-4">
+      {csrf_input}
       <input name="network_cidrs" placeholder="{t("placeholder_network_cidrs")}" />
       <input name="power_ports" placeholder="{t("placeholder_power_ports")}" />
       <input name="power_timeout_ms" value="200" />
@@ -3294,10 +4081,54 @@ def metrics_page(request: Request):
         return admin
     t = lambda key, **kwargs: _tr(request, key, **kwargs)
     counters = get_counters()
+    security_status = build_security_status(
+        settings=get_settings(),
+        counters=counters,
+        installation_rows=[dict(row) for row in list_app_installations(limit=200)],
+        recent_events=get_recent_events(limit=200),
+    ).model_dump(mode="json")
     rows = "".join(
         f"<tr><td>{_esc(name)}</td><td>{value}</td></tr>" for name, value in sorted(counters.items(), key=lambda kv: kv[0])
     )
+    warning_rows = "".join(
+        f"<li><strong>{_esc(item['code'])}</strong>: {_esc(item['message'])}</li>"
+        for item in security_status["warnings"]
+    )
+    deferral_rows = "".join(
+        f"<li><strong>{_esc(item['code'])}</strong>: {_esc(item['message'])}</li>"
+        for item in security_status["deferrals"]
+    )
+    failure_rows = "".join(
+        f"<tr><td>{_esc(item['category'])}</td><td>{_esc(item['count'])}</td><td>{_esc(item['last_seen_at'])}</td></tr>"
+        for item in security_status["recent_app_proof_failures"]
+    )
+    installation_rows = "".join(
+        f"<tr><td>{_esc(platform)}</td><td>{_esc(data['total'])}</td><td>{_esc(json.dumps(data['by_status'], sort_keys=True))}</td></tr>"
+        for platform, data in security_status["app_proof_installations"].items()
+    )
     body = f"""
+    <h2>Security Status</h2>
+    <article>
+      <p><strong>Hardening mode:</strong> {_esc(security_status["hardening_mode"])}</p>
+      <p><strong>App proof mode:</strong> {_esc(security_status["app_proof_mode"])}</p>
+      <p><strong>Admin bearer login app proof deferred:</strong> {_esc(security_status["admin_bearer_login_app_proof_deferred"])}</p>
+      <p><strong>Admin MFA required:</strong> {_esc(security_status["admin_mfa_required"])}</p>
+      <p><strong>Admin UI enabled:</strong> {_esc(security_status["admin_ui_enabled"])}</p>
+    </article>
+    <article>
+      <h3>Warnings</h3>
+      <ul>{warning_rows or '<li>none</li>'}</ul>
+      <h3>Deferrals</h3>
+      <ul>{deferral_rows}</ul>
+    </article>
+    <article><table>
+      <thead><tr><th>Platform</th><th>Total</th><th>Status Counts</th></tr></thead>
+      <tbody>{installation_rows or _empty_row(request, 3)}</tbody>
+    </table></article>
+    <article><table>
+      <thead><tr><th>Recent App-Proof Failure</th><th>Count</th><th>Last Seen</th></tr></thead>
+      <tbody>{failure_rows or _empty_row(request, 3)}</tbody>
+    </table></article>
     <h2>{t("heading_runtime_counters")}</h2>
     <article><table>
       <thead><tr><th>{t("col_counter")}</th><th>{t("col_value")}</th></tr></thead>

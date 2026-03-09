@@ -189,7 +189,8 @@ final class APNSNotificationCoordinator: NSObject, ObservableObject {
                 appBundleID: context.bundleID,
                 environment: context.environment,
                 baseURL: session.backendURL,
-                authToken: session.token
+                authToken: session.token,
+                authInstallationID: session.installationID
             )
             guard isObservedSession(session) else { return }
             lastSyncedContext = context
@@ -203,14 +204,15 @@ final class APNSNotificationCoordinator: NSObject, ObservableObject {
 
     private func deregisterDevice(using session: UserSession) async {
         guard session.role == .admin else { return }
-        let installationID = preferences.notificationInstallationID
+        let installationID = session.installationID
         guard !installationID.isEmpty else { return }
 
         do {
             try await apiClient.deleteAPNSDevice(
                 installationID: installationID,
                 baseURL: session.backendURL,
-                authToken: session.token
+                authToken: session.token,
+                authInstallationID: session.installationID
             )
         } catch {
             guard isObservedSession(session) else { return }
@@ -232,7 +234,7 @@ final class APNSNotificationCoordinator: NSObject, ObservableObject {
         return RegistrationContext(
             backendURL: session.backendURL.absoluteString,
             username: session.username,
-            installationID: preferences.notificationInstallationID,
+            installationID: session.installationID,
             deviceToken: deviceToken,
             bundleID: bundleID,
             environment: currentEnvironment

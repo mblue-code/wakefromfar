@@ -4,7 +4,7 @@ import re
 
 from app.power import PowerCheckResult
 
-from .conftest import auth_headers, login
+from .conftest import admin_ui_login, admin_ui_post, auth_headers, login
 
 
 def test_discovery_api_run_validate_and_import(client, monkeypatch):
@@ -123,11 +123,7 @@ def test_discovery_api_run_validate_and_import(client, monkeypatch):
 
 
 def test_admin_ui_discovery_page_and_actions(client, monkeypatch):
-    login_res = client.post(
-        "/admin/ui/login",
-        data={"username": "admin", "password": "adminpass123456", "next": "/admin/ui/discovery"},
-        follow_redirects=False,
-    )
+    login_res = admin_ui_login(client, next_path="/admin/ui/discovery")
     assert login_res.status_code == 303
 
     monkeypatch.setattr(
@@ -211,18 +207,27 @@ def test_admin_ui_discovery_page_and_actions(client, monkeypatch):
         lambda *_args, **_kwargs: PowerCheckResult(method="tcp", result="on", detail="connected", latency_ms=8),
     )
 
-    validate_res = client.post(f"/admin/ui/discovery/candidates/{candidate_id}/validate-wake", follow_redirects=False)
+    validate_res = admin_ui_post(
+        client,
+        f"/admin/ui/discovery/candidates/{candidate_id}/validate-wake",
+        form_page_path=f"/admin/ui/discovery?run_id={run_id}",
+        follow_redirects=False,
+    )
     assert validate_res.status_code == 303
 
-    import_res = client.post(
+    import_res = admin_ui_post(
+        client,
         f"/admin/ui/discovery/candidates/{candidate_id}/import",
+        form_page_path=f"/admin/ui/discovery?run_id={run_id}",
         data={"mode": "auto_merge_by_mac", "apply_power_settings": "1"},
         follow_redirects=False,
     )
     assert import_res.status_code == 303
 
-    bulk_res = client.post(
+    bulk_res = admin_ui_post(
+        client,
         f"/admin/ui/discovery/runs/{run_id}/import-bulk",
+        form_page_path=f"/admin/ui/discovery?run_id={run_id}",
         data={"mode": "auto_merge_by_mac", "apply_power_settings": "1", "skip_without_mac": "1"},
         follow_redirects=False,
     )

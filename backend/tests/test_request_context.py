@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import pytest
 from starlette.requests import Request
 
 from app.config import Settings
-from app.request_context import get_request_ip, is_https_request
+from app.request_context import get_request_ip, is_auth_transport_allowed, is_https_request, is_private_http_client_allowed, parse_cidrs
 
 
 def _request(
@@ -43,6 +44,14 @@ def test_proxy_headers_not_trusted_when_peer_is_not_ip() -> None:
     assert is_https_request(request, settings) is False
 
 
+def test_direct_https_request_is_secure() -> None:
+    settings = Settings(_env_file=None)
+    request = _request(client_host="8.8.8.8", scheme="https")
+
+    assert is_https_request(request, settings) is True
+    assert is_auth_transport_allowed(request, settings) is True
+
+
 def test_proxy_headers_trusted_for_configured_proxy_peer() -> None:
     settings = Settings(_env_file=None)
     settings.trust_proxy_headers = True
@@ -61,3 +70,64 @@ def test_proxy_headers_ignored_for_untrusted_proxy_peer() -> None:
 
     assert get_request_ip(request, settings) == "10.0.0.10"
     assert is_https_request(request, settings) is False
+
+
+def test_parse_cidrs_reports_invalid_entries() -> None:
+    valid, invalid = parse_cidrs(["127.0.0.1/32", "not-a-cidr", "100.64.0.0/10"])
+
+    assert valid == ["127.0.0.1/32", "100.64.0.0/10"]
+    assert invalid == ["not-a-cidr"]
+
+
+def test_private_http_allowed_cidrs_parse_from_settings() -> None:
+    settings = Settings(_env_file=None)
+    settings.private_http_allowed_cidrs = "127.0.0.1/32, 192.168.0.0/16 ,fd7a:115c:a1e0::/48"
+
+    assert settings.private_http_allowed_cidrs_list == [
+        "127.0.0.1/32",
+        "192.168.0.0/16",
+        "fd7a:115c:a1e0::/48",
+    ]
+
+
+def test_admin_allowed_cidrs_parse_from_settings() -> None:
+    settings = Settings(_env_file=None)
+    settings.admin_ip_allowlist_cidrs = "127.0.0.1/32, 100.64.0.0/10 ,fd7a:115c:a1e0::/48"
+
+    assert settings.admin_allowed_cidrs_list == [
+        "127.0.0.1/32",
+        "100.64.0.0/10",
+        "fd7a:115c:a1e0::/48",
+    ]
+    assert settings.parsed_admin_allowed_cidrs == [
+        "127.0.0.1/32",
+        "100.64.0.0/10",
+        "fd7a:115c:a1e0::/48",
+    ]
+
+
+def test_parsed_admin_allowed_cidrs_reject_invalid_entries() -> None:
+    settings = Settings(_env_file=None)
+    settings.admin_ip_allowlist_cidrs = "127.0.0.1/32,not-a-cidr"
+
+    with pytest.raises(ValueError, match="ADMIN_IP_ALLOWLIST_CIDRS contains invalid CIDR entries"):
+        _ = settings.parsed_admin_allowed_cidrs
+
+
+def test_private_http_client_is_recognized_when_ip_is_allowed() -> None:
+    settings = Settings(_env_file=None)
+    settings.private_http_allowed_cidrs = "192.168.0.0/16,100.64.0.0/10"
+    request = _request(client_host="192.168.10.25")
+
+    assert is_private_http_client_allowed(request, settings) is True
+    assert is_auth_transport_allowed(request, settings) is True
+
+
+def test_private_http_client_is_not_allowed_when_disabled() -> None:
+    settings = Settings(_env_file=None)
+    settings.allow_insecure_private_http = False
+    settings.private_http_allowed_cidrs = "192.168.0.0/16"
+    request = _request(client_host="192.168.10.25")
+
+    assert is_private_http_client_allowed(request, settings) is False
+    assert is_auth_transport_allowed(request, settings) is False

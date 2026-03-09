@@ -15,14 +15,16 @@ APP_SECRET=<strong-random-secret>
 ADMIN_USER=admin
 ADMIN_PASS=<strong-random-password>
 ENFORCE_IP_ALLOWLIST=false
+ALLOW_UNSAFE_PUBLIC_EXPOSURE=true
 TRUST_PROXY_HEADERS=true
 TRUSTED_PROXY_CIDRS=127.0.0.1/32,::1/128,172.18.0.0/16
 ```
 
 Notes:
 
-- `ENFORCE_IP_ALLOWLIST=false` is suitable for public beta testing.
-- For private/Tailscale-only operation, set it back to `true` and restrict `IP_ALLOWLIST_CIDRS`.
+- `ENFORCE_IP_ALLOWLIST=false` now requires `ALLOW_UNSAFE_PUBLIC_EXPOSURE=true` or the backend will refuse to start.
+- This override is explicitly unsafe and not recommended. Public exposure remains unsupported.
+- For private/Tailscale-only operation, keep `ENFORCE_IP_ALLOWLIST=true` and restrict `IP_ALLOWLIST_CIDRS`.
 
 ## 2) Start backend
 

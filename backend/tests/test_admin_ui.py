@@ -1,15 +1,29 @@
 from __future__ import annotations
 
 import re
+import subprocess
+import sys
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
+from app.db import enable_user_mfa, get_user_by_username
 from app.db import record_scheduled_wake_run
 from app.config import get_settings
 from app.power import PowerCheckResult
+from app.security import create_state_token, decrypt_secret_value, encrypt_secret_value, generate_totp_code, generate_totp_secret
 
-from .conftest import auth_headers, login
+from .conftest import (
+    ADMIN_UI_ORIGIN,
+    admin_ui_headers,
+    admin_ui_login,
+    admin_ui_post,
+    auth_headers,
+    extract_admin_ui_csrf_token,
+    login,
+)
 
 DAY_NAMES = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+BACKEND_DIR = Path(__file__).resolve().parents[1]
 
 
 def _future_schedule_form(device_id: str, *, label: str = "Morning Boot") -> dict[str, str]:
@@ -24,10 +38,101 @@ def _future_schedule_form(device_id: str, *, label: str = "Morning Boot") -> dic
     }
 
 
+def _extract_hidden_input(response_text: str, field_name: str) -> str:
+    match = re.search(rf'name="{re.escape(field_name)}"\s+value="([^"]+)"', response_text)
+    assert match is not None, response_text
+    return match.group(1)
+
+
+def _enable_admin_mfa_for_tests(username: str = "admin") -> str:
+    user = get_user_by_username(username)
+    assert user is not None
+    secret = generate_totp_secret()
+    enabled = enable_user_mfa(int(user["id"]), encrypt_secret_value(secret))
+    assert enabled is True
+    return secret
+
+
 def test_admin_ui_requires_login(client):
     response = client.get("/admin/ui", follow_redirects=False)
     assert response.status_code == 303
     assert response.headers["location"].startswith("/admin/ui/login")
+
+
+def test_admin_ui_login_is_blocked_from_non_admin_network(client_factory):
+    env = {
+        "IP_ALLOWLIST_CIDRS": "192.168.0.0/16",
+        "ADMIN_IP_ALLOWLIST_CIDRS": "127.0.0.1/32",
+    }
+    with client_factory(client_host="192.168.10.25", env_overrides=env) as client:
+        response = client.get("/admin/ui/login")
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Admin access is not allowed from this network"
+
+
+def test_admin_ui_authenticated_page_is_blocked_from_non_admin_network(client_factory):
+    with client_factory() as allowed_client:
+        login_response = admin_ui_login(allowed_client, next_path="/admin/ui/users")
+        session_cookie = allowed_client.cookies.get("admin_session")
+
+    assert login_response.status_code == 303
+    assert session_cookie
+
+    env = {
+        "IP_ALLOWLIST_CIDRS": "192.168.0.0/16",
+        "ADMIN_IP_ALLOWLIST_CIDRS": "127.0.0.1/32",
+    }
+    with client_factory(client_host="192.168.10.25", env_overrides=env) as client:
+        client.cookies.set("admin_session", session_cookie, path="/admin/ui")
+        response = client.get("/admin/ui/users", follow_redirects=False)
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Admin access is not allowed from this network"
+
+
+def test_admin_ui_access_from_allowed_admin_network_still_works(client_factory):
+    env = {
+        "IP_ALLOWLIST_CIDRS": "192.168.0.0/16",
+        "ADMIN_IP_ALLOWLIST_CIDRS": "192.168.0.0/16",
+    }
+    with client_factory(client_host="192.168.10.25", env_overrides=env) as client:
+        login_page = client.get("/admin/ui/login")
+        login_response = admin_ui_login(client, next_path="/admin/ui/users")
+        users_page = client.get("/admin/ui/users")
+
+    assert login_page.status_code == 200
+    assert login_response.status_code == 303
+    assert users_page.status_code == 200
+    assert "Create User" in users_page.text
+
+
+def test_admin_ui_disabled_returns_404_and_root_stays_safe(client_factory):
+    env = {
+        "ADMIN_UI_ENABLED": "false",
+        "ADMIN_IP_ALLOWLIST_CIDRS": "127.0.0.1/32",
+    }
+    with client_factory(env_overrides=env) as client:
+        login_page = client.get("/admin/ui/login")
+        dashboard = client.get("/admin/ui")
+        logout = client.get("/admin/ui/logout")
+        create_user = client.post(
+            "/admin/ui/users/create",
+            data={"username": "uiuser", "password": "uiuserpassword12", "role": "user"},
+        )
+        root_response = client.get("/", follow_redirects=False)
+        favicon = client.get("/favicon.ico", follow_redirects=False)
+        admin_token = login(client, "admin", "adminpass123456")
+        admin_api = client.get("/admin/users", headers=auth_headers(admin_token))
+
+    assert login_page.status_code == 404
+    assert dashboard.status_code == 404
+    assert logout.status_code == 404
+    assert create_user.status_code == 404
+    assert root_response.status_code == 200
+    assert "/admin/ui/login" not in root_response.text
+    assert favicon.status_code == 404
+    assert admin_api.status_code == 200, admin_api.text
 
 
 def test_admin_ui_exposes_favicon(client):
@@ -48,12 +153,297 @@ def test_root_favicon_redirects_to_admin_favicon(client):
     assert response.headers["location"] == "/admin/ui/favicon.png"
 
 
-def test_admin_ui_login_and_crud_paths(client):
-    login_res = client.post(
+def test_admin_ui_login_page_renders_csrf_token(client):
+    response = client.get("/admin/ui/login")
+
+    assert response.status_code == 200
+    assert extract_admin_ui_csrf_token(response.text)
+    set_cookie = response.headers.get("set-cookie", "").lower()
+    assert "admin_ui_csrf=" in set_cookie
+    assert "httponly" in set_cookie
+    assert "samesite=strict" in set_cookie
+    assert "path=/admin/ui" in set_cookie
+
+
+def test_admin_ui_login_post_requires_valid_csrf_token(client):
+    login_page = client.get("/admin/ui/login")
+    assert login_page.status_code == 200
+    valid_csrf_token = extract_admin_ui_csrf_token(login_page.text)
+
+    missing_token = client.post(
         "/admin/ui/login",
         data={"username": "admin", "password": "adminpass123456", "next": "/admin/ui/users"},
+        headers=admin_ui_headers(),
         follow_redirects=False,
     )
+    assert missing_token.status_code == 403
+    assert missing_token.text == "Invalid CSRF token"
+
+    invalid_token = client.post(
+        "/admin/ui/login",
+        data={
+            "username": "admin",
+            "password": "adminpass123456",
+            "next": "/admin/ui/users",
+            "csrf_token": "not-a-valid-token",
+        },
+        headers=admin_ui_headers(),
+        follow_redirects=False,
+    )
+    assert invalid_token.status_code == 403
+    assert invalid_token.text == "Invalid CSRF token"
+
+    valid_token = client.post(
+        "/admin/ui/login",
+        data={
+            "username": "admin",
+            "password": "adminpass123456",
+            "next": "/admin/ui/users",
+            "csrf_token": valid_csrf_token,
+        },
+        headers=admin_ui_headers(),
+        follow_redirects=False,
+    )
+    assert valid_token.status_code == 303
+    assert valid_token.headers["location"] == "/admin/ui/users"
+
+
+def test_admin_ui_authenticated_post_requires_valid_csrf_token(client):
+    login_res = admin_ui_login(client, next_path="/admin/ui/users")
+    assert login_res.status_code == 303
+
+    users_page = client.get("/admin/ui/users")
+    assert users_page.status_code == 200
+    valid_csrf_token = extract_admin_ui_csrf_token(users_page.text)
+
+    missing_token = client.post(
+        "/admin/ui/users/create",
+        data={"username": "csrf-missing", "password": "csrfmissing123", "role": "user"},
+        headers=admin_ui_headers(),
+        follow_redirects=False,
+    )
+    assert missing_token.status_code == 403
+    assert missing_token.text == "Invalid CSRF token"
+
+    invalid_token = client.post(
+        "/admin/ui/users/create",
+        data={
+            "username": "csrf-invalid",
+            "password": "csrfinvalid123",
+            "role": "user",
+            "csrf_token": f"{valid_csrf_token}x",
+        },
+        headers=admin_ui_headers(),
+        follow_redirects=False,
+    )
+    assert invalid_token.status_code == 403
+    assert invalid_token.text == "Invalid CSRF token"
+
+    valid_token = client.post(
+        "/admin/ui/users/create",
+        data={
+            "username": "csrf-valid",
+            "password": "csrfvalid123",
+            "role": "user",
+            "csrf_token": valid_csrf_token,
+        },
+        headers=admin_ui_headers(),
+        follow_redirects=False,
+    )
+    assert valid_token.status_code == 303
+    assert valid_token.headers["location"].startswith("/admin/ui/users?")
+
+
+def test_admin_ui_post_origin_and_referer_are_enforced(client):
+    login_res = admin_ui_login(client, next_path="/admin/ui/users")
+    assert login_res.status_code == 303
+
+    same_origin = admin_ui_post(
+        client,
+        "/admin/ui/users/create",
+        form_page_path="/admin/ui/users",
+        data={"username": "origin-good", "password": "origingood123", "role": "user"},
+        follow_redirects=False,
+    )
+    assert same_origin.status_code == 303
+
+    users_page = client.get("/admin/ui/users")
+    assert users_page.status_code == 200
+    csrf_token = extract_admin_ui_csrf_token(users_page.text)
+
+    wrong_origin = client.post(
+        "/admin/ui/users/create",
+        data={
+            "username": "origin-bad",
+            "password": "originbad123",
+            "role": "user",
+            "csrf_token": csrf_token,
+        },
+        headers=admin_ui_headers(origin="https://evil.example"),
+        follow_redirects=False,
+    )
+    assert wrong_origin.status_code == 403
+    assert wrong_origin.text == "Admin UI POST origin is not allowed"
+
+    same_referer = client.post(
+        "/admin/ui/users/create",
+        data={
+            "username": "referer-good",
+            "password": "referergood123",
+            "role": "user",
+            "csrf_token": csrf_token,
+        },
+        headers=admin_ui_headers(origin=None, referer=f"{ADMIN_UI_ORIGIN}/admin/ui/users"),
+        follow_redirects=False,
+    )
+    assert same_referer.status_code == 303
+
+    bad_referer = client.post(
+        "/admin/ui/users/create",
+        data={
+            "username": "referer-bad",
+            "password": "refererbad123",
+            "role": "user",
+            "csrf_token": csrf_token,
+        },
+        headers=admin_ui_headers(origin=None, referer="https://evil.example/admin/ui/users"),
+        follow_redirects=False,
+    )
+    assert bad_referer.status_code == 403
+    assert bad_referer.text == "Admin UI POST origin is not allowed"
+
+
+def test_admin_ui_guard_failures_emit_security_counters(client):
+    login_page = client.get("/admin/ui/login")
+    csrf_token = extract_admin_ui_csrf_token(login_page.text)
+
+    missing_csrf = client.post(
+        "/admin/ui/login",
+        data={"username": "admin", "password": "adminpass123456", "next": "/admin/ui/users"},
+        headers=admin_ui_headers(),
+        follow_redirects=False,
+    )
+    assert missing_csrf.status_code == 403
+
+    wrong_origin = client.post(
+        "/admin/ui/login",
+        data={
+            "username": "admin",
+            "password": "adminpass123456",
+            "next": "/admin/ui/users",
+            "csrf_token": csrf_token,
+        },
+        headers=admin_ui_headers(origin="https://evil.example"),
+        follow_redirects=False,
+    )
+    assert wrong_origin.status_code == 403
+
+    admin_h = auth_headers(login(client, "admin", "adminpass123456"))
+    metrics = client.get("/admin/metrics", headers=admin_h)
+    assert metrics.status_code == 200, metrics.text
+    counters = metrics.json()["counters"]
+    assert counters["security.admin_ui.csrf_failed"] == 1
+    assert counters["security.admin_ui.origin_failed"] == 1
+
+
+def test_admin_ui_schedule_toggle_and_discovery_run_require_post_guards(client, monkeypatch):
+    login_res = admin_ui_login(client, next_path="/admin/ui/scheduled-wakes")
+    assert login_res.status_code == 303
+
+    admin_token = login(client, "admin", "adminpass123456")
+    admin_h = auth_headers(admin_token)
+    create_device_res = client.post(
+        "/admin/devices",
+        headers=admin_h,
+        json={
+            "name": "guard-box",
+            "display_name": "Guard Box",
+            "mac": "AA:BB:CC:DD:EE:14",
+            "group_name": "Lab",
+            "broadcast": "192.168.1.255",
+            "source_ip": "192.168.1.14",
+            "udp_port": 9,
+            "check_method": "tcp",
+            "check_target": "192.168.1.114",
+            "check_port": 9,
+        },
+    )
+    assert create_device_res.status_code == 201, create_device_res.text
+    device_id = create_device_res.json()["id"]
+
+    create_job_res = client.post(
+        "/admin/scheduled-wakes",
+        headers=admin_h,
+        json={
+            "device_id": device_id,
+            "label": "Guard Wake",
+            "enabled": True,
+            "timezone": "UTC",
+            "days_of_week": [DAY_NAMES[(datetime.now(UTC) + timedelta(minutes=5)).weekday()]],
+            "local_time": (datetime.now(UTC) + timedelta(minutes=5)).strftime("%H:%M"),
+        },
+    )
+    assert create_job_res.status_code == 201, create_job_res.text
+    job_id = create_job_res.json()["id"]
+
+    missing_toggle_token = client.post(
+        f"/admin/ui/scheduled-wakes/{job_id}/toggle",
+        data={"return_to": f"/admin/ui/scheduled-wakes?device_id={device_id}"},
+        headers=admin_ui_headers(),
+        follow_redirects=False,
+    )
+    assert missing_toggle_token.status_code == 403
+    assert missing_toggle_token.text == "Invalid CSRF token"
+
+    valid_toggle = admin_ui_post(
+        client,
+        f"/admin/ui/scheduled-wakes/{job_id}/toggle",
+        form_page_path=f"/admin/ui/scheduled-wakes?device_id={device_id}",
+        data={"return_to": f"/admin/ui/scheduled-wakes?device_id={device_id}"},
+        follow_redirects=False,
+    )
+    assert valid_toggle.status_code == 303
+
+    jobs_res = client.get("/admin/scheduled-wakes", headers=admin_h)
+    assert jobs_res.status_code == 200, jobs_res.text
+    toggled_job = next(row for row in jobs_res.json() if row["id"] == job_id)
+    assert toggled_job["enabled"] is False
+
+    monkeypatch.setattr(
+        "app.admin_ui.discover_sender_bindings",
+        lambda: [
+            {
+                "network_cidr": "192.168.1.0/24",
+                "source_ip": "192.168.1.14",
+                "interface": "eth0",
+                "broadcast_ip": "192.168.1.255",
+            }
+        ],
+    )
+    monkeypatch.setattr("app.admin_ui._execute_discovery_run_ui", lambda *_args, **_kwargs: None)
+
+    missing_discovery_token = client.post(
+        "/admin/ui/discovery/run",
+        data={"network_cidrs": "192.168.1.0/24"},
+        headers=admin_ui_headers(),
+        follow_redirects=False,
+    )
+    assert missing_discovery_token.status_code == 403
+    assert missing_discovery_token.text == "Invalid CSRF token"
+
+    valid_discovery = admin_ui_post(
+        client,
+        "/admin/ui/discovery/run",
+        form_page_path="/admin/ui/discovery",
+        data={"network_cidrs": "192.168.1.0/24"},
+        follow_redirects=False,
+    )
+    assert valid_discovery.status_code == 303
+    assert valid_discovery.headers["location"].startswith("/admin/ui/discovery?run_id=")
+
+
+def test_admin_ui_login_and_crud_paths(client):
+    login_res = admin_ui_login(client, next_path="/admin/ui/users")
     assert login_res.status_code == 303
     assert login_res.headers["location"] == "/admin/ui/users"
     set_cookie = login_res.headers.get("set-cookie", "")
@@ -66,8 +456,10 @@ def test_admin_ui_login_and_crud_paths(client):
     assert users_page.status_code == 200
     assert "Create User" in users_page.text
 
-    create_user = client.post(
+    create_user = admin_ui_post(
+        client,
         "/admin/ui/users/create",
+        form_page_path="/admin/ui/users",
         data={"username": "uiuser", "password": "uiuserpassword12", "role": "user"},
         follow_redirects=False,
     )
@@ -80,11 +472,7 @@ def test_admin_ui_login_and_crud_paths(client):
 
 
 def test_admin_ui_session_is_revoked_after_password_change(client):
-    login_res = client.post(
-        "/admin/ui/login",
-        data={"username": "admin", "password": "adminpass123456", "next": "/admin/ui/users"},
-        follow_redirects=False,
-    )
+    login_res = admin_ui_login(client, next_path="/admin/ui/users")
     assert login_res.status_code == 303
 
     users_page = client.get("/admin/ui/users")
@@ -110,15 +498,13 @@ def test_admin_ui_session_is_revoked_after_password_change(client):
 
 def test_admin_ui_manual_provisioning_and_test_power_check(client, monkeypatch):
     # login via UI
-    login_res = client.post(
-        "/admin/ui/login",
-        data={"username": "admin", "password": "adminpass123456", "next": "/admin/ui/devices"},
-        follow_redirects=False,
-    )
+    login_res = admin_ui_login(client, next_path="/admin/ui/devices")
     assert login_res.status_code == 303
 
-    create_device = client.post(
+    create_device = admin_ui_post(
+        client,
         "/admin/ui/devices/create",
+        form_page_path="/admin/ui/devices",
         data={
             "name": "UI-NAS",
             "display_name": "UI NAS",
@@ -146,8 +532,10 @@ def test_admin_ui_manual_provisioning_and_test_power_check(client, monkeypatch):
     assert match is not None
     device_id = match.group(1)
 
-    update_device = client.post(
+    update_device = admin_ui_post(
+        client,
         f"/admin/ui/devices/{device_id}/update",
+        form_page_path="/admin/ui/devices",
         data={
             "name": "UI-NAS",
             "display_name": "UI NAS",
@@ -175,7 +563,12 @@ def test_admin_ui_manual_provisioning_and_test_power_check(client, monkeypatch):
         lambda *_args, **_kwargs: PowerCheckResult(method="tcp", result="on", detail="connected", latency_ms=7),
     )
 
-    test_check = client.post(f"/admin/ui/devices/{device_id}/test-power-check", follow_redirects=False)
+    test_check = admin_ui_post(
+        client,
+        f"/admin/ui/devices/{device_id}/test-power-check",
+        form_page_path="/admin/ui/devices",
+        follow_redirects=False,
+    )
     assert test_check.status_code == 303
 
     power_logs = client.get("/admin/ui/power-check-logs")
@@ -183,15 +576,19 @@ def test_admin_ui_manual_provisioning_and_test_power_check(client, monkeypatch):
     assert device_id in power_logs.text
 
     # invite flow is disabled and redirects to users page.
-    create_user = client.post(
+    create_user = admin_ui_post(
+        client,
         "/admin/ui/users/create",
+        form_page_path="/admin/ui/users",
         data={"username": "invitee", "password": "inviteepassword1", "role": "user"},
         follow_redirects=False,
     )
     assert create_user.status_code == 303
 
-    invite_res = client.post(
+    invite_res = admin_ui_post(
+        client,
         "/admin/ui/invites/create",
+        form_page_path="/admin/ui/users",
         data={"username": "invitee"},
         follow_redirects=False,
     )
@@ -200,11 +597,7 @@ def test_admin_ui_manual_provisioning_and_test_power_check(client, monkeypatch):
 
 
 def test_admin_ui_scheduled_wake_flow(client):
-    login_res = client.post(
-        "/admin/ui/login",
-        data={"username": "admin", "password": "adminpass123456", "next": "/admin/ui/scheduled-wakes"},
-        follow_redirects=False,
-    )
+    login_res = admin_ui_login(client, next_path="/admin/ui/scheduled-wakes")
     assert login_res.status_code == 303
     assert login_res.headers["location"] == "/admin/ui/scheduled-wakes"
 
@@ -239,8 +632,10 @@ def test_admin_ui_scheduled_wake_flow(client):
     assert "Scheduled Wakes" in schedules_page.text
     assert "Recent Scheduled Wake Runs" in schedules_page.text
 
-    create_schedule = client.post(
+    create_schedule = admin_ui_post(
+        client,
         "/admin/ui/scheduled-wakes/create",
+        form_page_path=f"/admin/ui/scheduled-wakes/new?device_id={device_id}",
         data={
             **_future_schedule_form(device_id, label="Morning Boot"),
             "return_to": f"/admin/ui/scheduled-wakes?device_id={device_id}",
@@ -264,8 +659,10 @@ def test_admin_ui_scheduled_wake_flow(client):
     assert edit_page.status_code == 200
     assert "Edit Scheduled Wake" in edit_page.text
 
-    update_schedule = client.post(
+    update_schedule = admin_ui_post(
+        client,
         f"/admin/ui/scheduled-wakes/{job_id}/update",
+        form_page_path=f"/admin/ui/scheduled-wakes/{job_id}/edit",
         data={
             **_future_schedule_form(device_id, label="Office Wake"),
             "return_to": f"/admin/ui/scheduled-wakes?device_id={device_id}",
@@ -279,8 +676,10 @@ def test_admin_ui_scheduled_wake_flow(client):
     updated_job = next(row for row in updated_jobs_res.json() if row["id"] == job_id)
     assert updated_job["label"] == "Office Wake"
 
-    toggle_schedule = client.post(
+    toggle_schedule = admin_ui_post(
+        client,
         f"/admin/ui/scheduled-wakes/{job_id}/toggle",
+        form_page_path=f"/admin/ui/scheduled-wakes?device_id={device_id}",
         data={"return_to": f"/admin/ui/scheduled-wakes?device_id={device_id}"},
         follow_redirects=False,
     )
@@ -292,8 +691,10 @@ def test_admin_ui_scheduled_wake_flow(client):
     assert toggled_job["enabled"] is False
     assert toggled_job["next_run_at"] is None
 
-    delete_schedule = client.post(
+    delete_schedule = admin_ui_post(
+        client,
         f"/admin/ui/scheduled-wakes/{job_id}/delete",
+        form_page_path=f"/admin/ui/scheduled-wakes?device_id={device_id}",
         data={"return_to": f"/admin/ui/scheduled-wakes?device_id={device_id}"},
         follow_redirects=False,
     )
@@ -312,11 +713,7 @@ def test_admin_ui_scheduled_wake_flow(client):
 
 
 def test_admin_ui_scheduled_wake_history_and_validation_errors(client):
-    login_res = client.post(
-        "/admin/ui/login",
-        data={"username": "admin", "password": "adminpass123456", "next": "/admin/ui/scheduled-wakes"},
-        follow_redirects=False,
-    )
+    login_res = admin_ui_login(client, next_path="/admin/ui/scheduled-wakes")
     assert login_res.status_code == 303
 
     admin_token = login(client, "admin", "adminpass123456")
@@ -372,8 +769,10 @@ def test_admin_ui_scheduled_wake_history_and_validation_errors(client):
     assert "magic_packet_sent" in history_page.text
     assert "sent" in history_page.text
 
-    invalid_timezone = client.post(
+    invalid_timezone = admin_ui_post(
+        client,
         "/admin/ui/scheduled-wakes/create",
+        form_page_path=f"/admin/ui/scheduled-wakes/new?device_id={device_id}",
         data={
             **_future_schedule_form(device_id),
             "timezone": "Mars/Olympus",
@@ -386,8 +785,10 @@ def test_admin_ui_scheduled_wake_history_and_validation_errors(client):
     assert invalid_timezone_page.status_code == 200
     assert "Invalid timezone" in invalid_timezone_page.text
 
-    invalid_time = client.post(
+    invalid_time = admin_ui_post(
+        client,
         "/admin/ui/scheduled-wakes/create",
+        form_page_path=f"/admin/ui/scheduled-wakes/new?device_id={device_id}",
         data={
             **_future_schedule_form(device_id),
             "local_time": "25:99",
@@ -400,8 +801,10 @@ def test_admin_ui_scheduled_wake_history_and_validation_errors(client):
     assert invalid_time_page.status_code == 200
     assert "local_time must use HH:MM" in invalid_time_page.text
 
-    missing_days = client.post(
+    missing_days = admin_ui_post(
+        client,
         "/admin/ui/scheduled-wakes/create",
+        form_page_path=f"/admin/ui/scheduled-wakes/new?device_id={device_id}",
         data={
             "device_id": device_id,
             "label": "No days",
@@ -417,8 +820,10 @@ def test_admin_ui_scheduled_wake_history_and_validation_errors(client):
     assert missing_days_page.status_code == 200
     assert "Select at least one day" in missing_days_page.text
 
-    unknown_device = client.post(
+    unknown_device = admin_ui_post(
+        client,
         "/admin/ui/scheduled-wakes/create",
+        form_page_path="/admin/ui/scheduled-wakes/new",
         data={
             **_future_schedule_form("missing-device"),
             "return_to": "/admin/ui/scheduled-wakes",
@@ -432,11 +837,7 @@ def test_admin_ui_scheduled_wake_history_and_validation_errors(client):
 
 
 def test_admin_ui_device_membership_flow(client):
-    login_res = client.post(
-        "/admin/ui/login",
-        data={"username": "admin", "password": "adminpass123456", "next": "/admin/ui/device-memberships"},
-        follow_redirects=False,
-    )
+    login_res = admin_ui_login(client, next_path="/admin/ui/device-memberships")
     assert login_res.status_code == 303
     assert login_res.headers["location"] == "/admin/ui/device-memberships"
 
@@ -480,8 +881,10 @@ def test_admin_ui_device_membership_flow(client):
     legacy_page = client.get("/admin/ui/assignments")
     assert legacy_page.status_code == 404
 
-    create_membership = client.post(
+    create_membership = admin_ui_post(
+        client,
         "/admin/ui/device-memberships/create",
+        form_page_path="/admin/ui/device-memberships",
         data={
             "user_id": str(user_id),
             "device_id": device_id,
@@ -514,8 +917,10 @@ def test_admin_ui_device_membership_flow(client):
     assert "Living Room NAS (nas-box)" in memberships_page_after_create.text
     assert "Remove access for &#x27;member-ui&#x27; to &#x27;Living Room NAS (nas-box)&#x27;?" in memberships_page_after_create.text
 
-    update_membership = client.post(
+    update_membership = admin_ui_post(
+        client,
         f"/admin/ui/device-memberships/{membership['id']}/update",
+        form_page_path="/admin/ui/device-memberships",
         data={
             "can_wake": "1",
             "can_manage_schedule": "1",
@@ -535,8 +940,10 @@ def test_admin_ui_device_membership_flow(client):
     assert updated_membership["is_favorite"] is False
     assert updated_membership["sort_order"] == 2
 
-    delete_membership = client.post(
+    delete_membership = admin_ui_post(
+        client,
         f"/admin/ui/device-memberships/{membership['id']}/delete",
+        form_page_path="/admin/ui/device-memberships",
         follow_redirects=False,
     )
     assert delete_membership.status_code == 303
@@ -554,11 +961,7 @@ def test_admin_ui_device_membership_flow(client):
 
 
 def test_admin_ui_device_membership_errors_are_visible(client):
-    login_res = client.post(
-        "/admin/ui/login",
-        data={"username": "admin", "password": "adminpass123456", "next": "/admin/ui/device-memberships"},
-        follow_redirects=False,
-    )
+    login_res = admin_ui_login(client, next_path="/admin/ui/device-memberships")
     assert login_res.status_code == 303
 
     admin_token = login(client, "admin", "adminpass123456")
@@ -591,8 +994,10 @@ def test_admin_ui_device_membership_errors_are_visible(client):
     assert create_device_res.status_code == 201, create_device_res.text
     device_id = create_device_res.json()["id"]
 
-    bad_sort_order = client.post(
+    bad_sort_order = admin_ui_post(
+        client,
         "/admin/ui/device-memberships/create",
+        form_page_path="/admin/ui/device-memberships",
         data={"user_id": str(user_id), "device_id": device_id, "sort_order": "not-a-number"},
         follow_redirects=False,
     )
@@ -603,7 +1008,12 @@ def test_admin_ui_device_membership_errors_are_visible(client):
     assert bad_sort_page.status_code == 200
     assert "sort_order must be integer" in bad_sort_page.text
 
-    delete_missing = client.post("/admin/ui/device-memberships/not-a-real-id/delete", follow_redirects=False)
+    delete_missing = admin_ui_post(
+        client,
+        "/admin/ui/device-memberships/not-a-real-id/delete",
+        form_page_path="/admin/ui/device-memberships",
+        follow_redirects=False,
+    )
     assert delete_missing.status_code == 303
     assert delete_missing.headers["location"].startswith("/admin/ui/device-memberships?")
 
@@ -618,11 +1028,7 @@ def test_admin_ui_german_language_switch(client):
     assert "Admin-Login" in login_page.text
     assert "admin_ui_lang=de" in login_page.headers.get("set-cookie", "")
 
-    login_res = client.post(
-        "/admin/ui/login",
-        data={"username": "admin", "password": "adminpass123456", "next": "/admin/ui/users"},
-        follow_redirects=False,
-    )
+    login_res = admin_ui_login(client, next_path="/admin/ui/users", lang="de", login_page_path="/admin/ui/login?lang=de")
     assert login_res.status_code == 303
     assert login_res.headers["location"] == "/admin/ui/users"
 
@@ -632,11 +1038,7 @@ def test_admin_ui_german_language_switch(client):
 
 
 def test_admin_ui_login_next_path_is_sanitized(client):
-    login_res = client.post(
-        "/admin/ui/login",
-        data={"username": "admin", "password": "adminpass123456", "next": "https://evil.example/phish"},
-        follow_redirects=False,
-    )
+    login_res = admin_ui_login(client, next_path="https://evil.example/phish")
     assert login_res.status_code == 303
     assert login_res.headers["location"] == "/admin/ui"
 
@@ -646,18 +1048,10 @@ def test_admin_ui_login_rate_limit_enforced(client):
     old_limit = settings.login_rate_limit_per_minute
     settings.login_rate_limit_per_minute = 1
     try:
-        first = client.post(
-            "/admin/ui/login",
-            data={"username": "admin", "password": "wrong-password", "next": "/admin/ui"},
-            follow_redirects=False,
-        )
+        first = admin_ui_login(client, password="wrong-password")
         assert first.status_code == 303
 
-        second = client.post(
-            "/admin/ui/login",
-            data={"username": "admin", "password": "wrong-password", "next": "/admin/ui"},
-            follow_redirects=False,
-        )
+        second = admin_ui_login(client, password="wrong-password")
         assert second.status_code == 303
         assert second.headers["location"].startswith("/admin/ui/login?")
 
@@ -682,11 +1076,11 @@ def test_admin_ui_login_cookie_secure_with_trusted_forwarded_proto(client):
     old_trust_proxy_headers = settings.trust_proxy_headers
     try:
         settings.trust_proxy_headers = True
-        response = client.post(
-            "/admin/ui/login",
-            data={"username": "admin", "password": "adminpass123456", "next": "/admin/ui/users"},
+        response = admin_ui_login(
+            client,
+            next_path="/admin/ui/users",
             headers={"x-forwarded-proto": "https"},
-            follow_redirects=False,
+            origin="https://testserver",
         )
         assert response.status_code == 303
         assert "secure" in response.headers.get("set-cookie", "").lower()
@@ -695,11 +1089,291 @@ def test_admin_ui_login_cookie_secure_with_trusted_forwarded_proto(client):
 
 
 def test_admin_ui_login_cookie_does_not_trust_proto_header_by_default(client):
-    response = client.post(
-        "/admin/ui/login",
-        data={"username": "admin", "password": "adminpass123456", "next": "/admin/ui/users"},
-        headers={"x-forwarded-proto": "https"},
-        follow_redirects=False,
-    )
+    response = admin_ui_login(client, next_path="/admin/ui/users", headers={"x-forwarded-proto": "https"})
     assert response.status_code == 303
     assert "secure" not in response.headers.get("set-cookie", "").lower()
+
+
+def test_admin_ui_mfa_setup_page_shows_enrollment_data(client):
+    login_res = admin_ui_login(client, next_path="/admin/ui/mfa")
+    assert login_res.status_code == 303
+
+    page = client.get("/admin/ui/mfa")
+    assert page.status_code == 200
+    assert "Set Up Authenticator App" in page.text
+    assert "otpauth://totp/" in page.text
+
+    encrypted_secret = _extract_hidden_input(page.text, "encrypted_secret")
+    secret = decrypt_secret_value(encrypted_secret)
+    assert secret
+    assert "WakeFromFar" in page.text
+
+
+def test_admin_ui_mfa_setup_requires_valid_totp(client):
+    login_res = admin_ui_login(client, next_path="/admin/ui/mfa")
+    assert login_res.status_code == 303
+
+    page = client.get("/admin/ui/mfa")
+    assert page.status_code == 200
+    csrf_token = extract_admin_ui_csrf_token(page.text)
+    encrypted_secret = _extract_hidden_input(page.text, "encrypted_secret")
+    secret = decrypt_secret_value(encrypted_secret)
+
+    invalid = client.post(
+        "/admin/ui/mfa/setup",
+        data={"encrypted_secret": encrypted_secret, "code": "000000", "csrf_token": csrf_token},
+        headers=admin_ui_headers(),
+        follow_redirects=False,
+    )
+    assert invalid.status_code == 303
+    assert invalid.headers["location"].startswith("/admin/ui/mfa/setup?")
+    user = get_user_by_username("admin")
+    assert user is not None
+    assert bool(user["mfa_enabled"]) is False
+
+    valid = client.post(
+        "/admin/ui/mfa/setup",
+        data={"encrypted_secret": encrypted_secret, "code": generate_totp_code(secret), "csrf_token": csrf_token},
+        headers=admin_ui_headers(),
+        follow_redirects=False,
+    )
+    assert valid.status_code == 303
+    assert valid.headers["location"].startswith("/admin/ui/mfa?")
+
+    refreshed_user = get_user_by_username("admin")
+    assert refreshed_user is not None
+    assert bool(refreshed_user["mfa_enabled"]) is True
+    assert refreshed_user["mfa_totp_secret_encrypted"]
+
+    admin_h = auth_headers(login(client, "admin", "adminpass123456"))
+    metrics = client.get("/admin/metrics", headers=admin_h)
+    assert metrics.status_code == 200, metrics.text
+    counters = metrics.json()["counters"]
+    assert counters["security.admin_ui.mfa.verify_failed"] >= 1
+    assert counters["security.admin_ui.mfa.setup_completed"] == 1
+
+
+def test_admin_ui_mfa_verify_route_keeps_csrf_and_origin_protection(client):
+    _enable_admin_mfa_for_tests()
+    login_res = admin_ui_login(client, next_path="/admin/ui/users")
+    assert login_res.status_code == 303
+    assert login_res.headers["location"].startswith("/admin/ui/mfa/verify")
+
+    verify_page = client.get("/admin/ui/mfa/verify")
+    assert verify_page.status_code == 200
+    csrf_token = extract_admin_ui_csrf_token(verify_page.text)
+
+    missing_csrf = client.post(
+        "/admin/ui/mfa/verify",
+        data={"code": "123456"},
+        headers=admin_ui_headers(),
+        follow_redirects=False,
+    )
+    assert missing_csrf.status_code == 403
+    assert missing_csrf.text == "Invalid CSRF token"
+
+    wrong_origin = client.post(
+        "/admin/ui/mfa/verify",
+        data={"code": "123456", "csrf_token": csrf_token},
+        headers=admin_ui_headers(origin="https://evil.example"),
+        follow_redirects=False,
+    )
+    assert wrong_origin.status_code == 403
+    assert wrong_origin.text == "Admin UI POST origin is not allowed"
+
+
+def test_admin_ui_login_with_mfa_enabled_requires_pending_verify_state(client):
+    secret = _enable_admin_mfa_for_tests()
+
+    login_res = admin_ui_login(client, next_path="/admin/ui/users")
+    assert login_res.status_code == 303
+    assert login_res.headers["location"].startswith("/admin/ui/mfa/verify")
+    assert client.cookies.get("admin_session") is None
+    assert client.cookies.get("admin_pending_session")
+
+    blocked = client.get("/admin/ui/users", follow_redirects=False)
+    assert blocked.status_code == 303
+    assert blocked.headers["location"].startswith("/admin/ui/mfa/verify")
+
+    invalid = admin_ui_post(
+        client,
+        "/admin/ui/mfa/verify",
+        form_page_path="/admin/ui/mfa/verify",
+        data={"code": "000000"},
+        follow_redirects=False,
+    )
+    assert invalid.status_code == 303
+    assert invalid.headers["location"].startswith("/admin/ui/mfa/verify?")
+
+    valid = admin_ui_post(
+        client,
+        "/admin/ui/mfa/verify",
+        form_page_path="/admin/ui/mfa/verify",
+        data={"code": generate_totp_code(secret)},
+        follow_redirects=False,
+    )
+    assert valid.status_code == 303
+    assert valid.headers["location"] == "/admin/ui/users"
+    assert client.cookies.get("admin_session")
+    assert client.cookies.get("admin_pending_session") is None
+
+    users_page = client.get("/admin/ui/users")
+    assert users_page.status_code == 200
+    assert "Create User" in users_page.text
+
+    admin_h = auth_headers(login(client, "admin", "adminpass123456"))
+    metrics = client.get("/admin/metrics", headers=admin_h)
+    assert metrics.status_code == 200, metrics.text
+    counters = metrics.json()["counters"]
+    assert counters["security.admin_ui.mfa.verify_started"] == 1
+    assert counters["security.admin_ui.mfa.verify_failed"] >= 1
+    assert counters["security.admin_ui.mfa.verify_success"] == 1
+
+
+def test_admin_ui_expired_pending_mfa_state_is_rejected_safely(client):
+    _enable_admin_mfa_for_tests()
+    user = get_user_by_username("admin")
+    assert user is not None
+
+    expired_token = create_state_token(
+        subject="admin",
+        state_type="admin_ui_pending",
+        expires_seconds=-1,
+        extra_claims={"ver": int(user["token_version"] or 0), "purpose": "verify", "next": "/admin/ui/users"},
+    )
+    client.cookies.set("admin_pending_session", expired_token, path="/admin/ui")
+
+    response = client.get("/admin/ui/mfa/verify", follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers["location"].startswith("/admin/ui/login?")
+
+    admin_h = auth_headers(login(client, "admin", "adminpass123456"))
+    metrics = client.get("/admin/metrics", headers=admin_h)
+    assert metrics.status_code == 200, metrics.text
+    assert metrics.json()["counters"]["security.admin_ui.mfa.pending_expired"] >= 1
+
+
+def test_admin_ui_mfa_required_false_still_allows_password_only_login_for_non_enrolled_admin(client_factory):
+    with client_factory(env_overrides={"ADMIN_MFA_REQUIRED": "false"}) as client:
+        response = admin_ui_login(client, next_path="/admin/ui/users")
+        assert response.status_code == 303
+        assert response.headers["location"] == "/admin/ui/users"
+        assert client.cookies.get("admin_session")
+
+
+def test_admin_ui_mfa_required_true_forces_non_enrolled_admin_into_setup(client_factory):
+    with client_factory(env_overrides={"ADMIN_MFA_REQUIRED": "true"}) as client:
+        login_res = admin_ui_login(client, next_path="/admin/ui/users")
+        assert login_res.status_code == 303
+        assert login_res.headers["location"].startswith("/admin/ui/mfa/setup")
+        assert client.cookies.get("admin_session") is None
+        assert client.cookies.get("admin_pending_session")
+
+        setup_page = client.get("/admin/ui/mfa/setup")
+        assert setup_page.status_code == 200
+        encrypted_secret = _extract_hidden_input(setup_page.text, "encrypted_secret")
+        secret = decrypt_secret_value(encrypted_secret)
+
+        blocked = client.get("/admin/ui/users", follow_redirects=False)
+        assert blocked.status_code == 303
+        assert blocked.headers["location"].startswith("/admin/ui/mfa/setup")
+
+        completed = admin_ui_post(
+            client,
+            "/admin/ui/mfa/setup",
+            form_page_path="/admin/ui/mfa/setup",
+            data={"encrypted_secret": encrypted_secret, "code": generate_totp_code(secret)},
+            follow_redirects=False,
+        )
+        assert completed.status_code == 303
+        assert completed.headers["location"].startswith("/admin/ui/users?")
+        assert client.cookies.get("admin_session")
+
+
+def test_admin_ui_mfa_required_true_still_requires_verify_for_enrolled_admin(client_factory):
+    with client_factory(env_overrides={"ADMIN_MFA_REQUIRED": "true"}) as client:
+        secret = _enable_admin_mfa_for_tests()
+        login_res = admin_ui_login(client, next_path="/admin/ui/users")
+        assert login_res.status_code == 303
+        assert login_res.headers["location"].startswith("/admin/ui/mfa/verify")
+
+        verified = admin_ui_post(
+            client,
+            "/admin/ui/mfa/verify",
+            form_page_path="/admin/ui/mfa/verify",
+            data={"code": generate_totp_code(secret)},
+            follow_redirects=False,
+        )
+        assert verified.status_code == 303
+        assert verified.headers["location"] == "/admin/ui/users"
+
+
+def test_admin_ui_mfa_verify_rate_limit_is_enforced(client):
+    secret = _enable_admin_mfa_for_tests()
+    settings = get_settings()
+    old_limit = settings.admin_mfa_verify_rate_limit_per_minute
+    settings.admin_mfa_verify_rate_limit_per_minute = 1
+    try:
+        login_res = admin_ui_login(client, next_path="/admin/ui/users")
+        assert login_res.status_code == 303
+
+        first = admin_ui_post(
+            client,
+            "/admin/ui/mfa/verify",
+            form_page_path="/admin/ui/mfa/verify",
+            data={"code": "000000"},
+            follow_redirects=False,
+        )
+        assert first.status_code == 303
+
+        second = admin_ui_post(
+            client,
+            "/admin/ui/mfa/verify",
+            form_page_path="/admin/ui/mfa/verify",
+            data={"code": generate_totp_code(secret)},
+            follow_redirects=False,
+        )
+        assert second.status_code == 303
+        assert second.headers["location"].startswith("/admin/ui/mfa/verify?")
+
+        blocked = client.get(second.headers["location"])
+        assert blocked.status_code == 200
+        assert "Too many MFA verification attempts" in blocked.text
+    finally:
+        settings.admin_mfa_verify_rate_limit_per_minute = old_limit
+
+
+def test_admin_api_login_remains_password_only_when_browser_mfa_is_enabled(client):
+    _enable_admin_mfa_for_tests()
+
+    browser_login = admin_ui_login(client, next_path="/admin/ui/users")
+    assert browser_login.status_code == 303
+    assert browser_login.headers["location"].startswith("/admin/ui/mfa/verify")
+
+    api_login = client.post("/auth/login", json={"username": "admin", "password": "adminpass123456"})
+    assert api_login.status_code == 200, api_login.text
+    assert api_login.json()["token"]
+
+
+def test_admin_cli_disable_mfa_resets_admin_browser_flow(client_factory):
+    with client_factory(env_overrides={"ADMIN_MFA_REQUIRED": "true"}) as client:
+        _enable_admin_mfa_for_tests()
+
+        result = subprocess.run(
+            [sys.executable, "-m", "app.cli", "admin-disable-mfa", "--username", "admin"],
+            cwd=BACKEND_DIR,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr
+        assert "Disabled MFA for admin 'admin'" in result.stdout
+
+        user = get_user_by_username("admin")
+        assert user is not None
+        assert bool(user["mfa_enabled"]) is False
+        assert user["mfa_totp_secret_encrypted"] is None
+
+        login_res = admin_ui_login(client, next_path="/admin/ui/users")
+        assert login_res.status_code == 303
+        assert login_res.headers["location"].startswith("/admin/ui/mfa/setup")

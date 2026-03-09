@@ -36,6 +36,9 @@ def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
 
 
 _APP_TABLES = [
+    "ios_app_attest_keys",
+    "app_installations",
+    "app_proof_challenges",
     "notification_devices",
     "shutdown_poke_requests",
     "activity_events",
@@ -106,6 +109,10 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             password_hash TEXT NOT NULL,
             role TEXT NOT NULL CHECK(role IN ('admin', 'user')),
             token_version INTEGER NOT NULL DEFAULT 0,
+            mfa_enabled INTEGER NOT NULL DEFAULT 0 CHECK(mfa_enabled IN (0, 1)),
+            mfa_totp_secret_encrypted TEXT,
+            mfa_enabled_at TEXT,
+            mfa_updated_at TEXT,
             created_at TEXT NOT NULL
         )
         """
@@ -400,6 +407,76 @@ def _create_schema(conn: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_notification_devices_provider_env_active "
         "ON notification_devices(provider, environment, is_active, updated_at DESC)"
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS app_proof_challenges (
+            id TEXT PRIMARY KEY,
+            purpose TEXT NOT NULL CHECK(purpose IN ('enroll', 'login', 'reauth')),
+            platform TEXT NOT NULL CHECK(platform IN ('android', 'ios')),
+            installation_id TEXT NOT NULL,
+            username_hint TEXT,
+            challenge_nonce TEXT NOT NULL,
+            app_version TEXT,
+            os_version TEXT,
+            client_ip TEXT,
+            expires_at TEXT NOT NULL,
+            consumed_at TEXT,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_app_proof_challenges_installation_created "
+        "ON app_proof_challenges(installation_id, created_at DESC)"
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS app_installations (
+            installation_id TEXT PRIMARY KEY,
+            platform TEXT NOT NULL CHECK(platform IN ('android', 'ios')),
+            status TEXT NOT NULL CHECK(status IN ('pending', 'trusted', 'report_only', 'revoked')),
+            user_id INTEGER,
+            session_version INTEGER NOT NULL DEFAULT 1,
+            proof_method TEXT,
+            app_id TEXT,
+            app_version TEXT,
+            os_version TEXT,
+            last_verified_at TEXT,
+            last_login_at TEXT,
+            last_seen_ip TEXT,
+            last_provider_status TEXT,
+            last_provider_error TEXT,
+            last_verdict_json TEXT,
+            last_failure_reason TEXT,
+            last_failure_detail TEXT,
+            last_failure_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            revoked_at TEXT,
+            revoked_reason TEXT,
+            FOREIGN KEY(user_id) REFERENCES users(id)
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_app_installations_user_updated "
+        "ON app_installations(user_id, updated_at DESC)"
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS ios_app_attest_keys (
+            installation_id TEXT PRIMARY KEY,
+            key_id TEXT NOT NULL,
+            public_key_pem TEXT NOT NULL,
+            sign_count INTEGER NOT NULL DEFAULT 0,
+            receipt_b64 TEXT,
+            last_asserted_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(installation_id) REFERENCES app_installations(installation_id)
+        )
+        """
+    )
 
 
 def init_db() -> None:
@@ -407,6 +484,32 @@ def init_db() -> None:
         if _schema_requires_reset(conn):
             _reset_app_schema(conn)
         _create_schema(conn)
+        _ensure_user_mfa_columns(conn)
+        _ensure_app_installation_columns(conn)
+
+
+def _ensure_user_mfa_columns(conn: sqlite3.Connection) -> None:
+    if not _table_has_column(conn, "users", "mfa_enabled"):
+        conn.execute(
+            "ALTER TABLE users ADD COLUMN mfa_enabled INTEGER NOT NULL DEFAULT 0 CHECK(mfa_enabled IN (0, 1))"
+        )
+    if not _table_has_column(conn, "users", "mfa_totp_secret_encrypted"):
+        conn.execute("ALTER TABLE users ADD COLUMN mfa_totp_secret_encrypted TEXT")
+    if not _table_has_column(conn, "users", "mfa_enabled_at"):
+        conn.execute("ALTER TABLE users ADD COLUMN mfa_enabled_at TEXT")
+    if not _table_has_column(conn, "users", "mfa_updated_at"):
+        conn.execute("ALTER TABLE users ADD COLUMN mfa_updated_at TEXT")
+
+
+def _ensure_app_installation_columns(conn: sqlite3.Connection) -> None:
+    if not _table_exists(conn, "app_installations"):
+        return
+    if not _table_has_column(conn, "app_installations", "last_failure_reason"):
+        conn.execute("ALTER TABLE app_installations ADD COLUMN last_failure_reason TEXT")
+    if not _table_has_column(conn, "app_installations", "last_failure_detail"):
+        conn.execute("ALTER TABLE app_installations ADD COLUMN last_failure_detail TEXT")
+    if not _table_has_column(conn, "app_installations", "last_failure_at"):
+        conn.execute("ALTER TABLE app_installations ADD COLUMN last_failure_at TEXT")
 
 
 def get_user_by_id(user_id: int) -> sqlite3.Row | None:
@@ -467,11 +570,58 @@ def get_user_by_username(username: str) -> sqlite3.Row | None:
         return conn.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
 
 
+def enable_user_mfa(user_id: int, encrypted_secret: str) -> bool:
+    now = datetime.now(UTC).isoformat()
+    with get_conn() as conn:
+        cur = conn.execute(
+            """
+            UPDATE users
+            SET mfa_enabled = 1,
+                mfa_totp_secret_encrypted = ?,
+                mfa_enabled_at = COALESCE(mfa_enabled_at, ?),
+                mfa_updated_at = ?
+            WHERE id = ?
+            """,
+            (encrypted_secret, now, now, user_id),
+        )
+        return cur.rowcount > 0
+
+
+def disable_user_mfa_by_username(username: str) -> bool:
+    now = datetime.now(UTC).isoformat()
+    with get_conn() as conn:
+        cur = conn.execute(
+            """
+            UPDATE users
+            SET mfa_enabled = 0,
+                mfa_totp_secret_encrypted = NULL,
+                mfa_enabled_at = NULL,
+                mfa_updated_at = ?,
+                token_version = COALESCE(token_version, 0) + 1
+            WHERE username = ? AND role = 'admin'
+            """,
+            (now, username),
+        )
+        return cur.rowcount > 0
+
+
 def create_user(username: str, password_hash: str, role: str) -> int:
     now = datetime.now(UTC).isoformat()
     with get_conn() as conn:
         cur = conn.execute(
-            "INSERT INTO users(username, password_hash, role, token_version, created_at) VALUES (?, ?, ?, 0, ?)",
+            """
+            INSERT INTO users(
+                username,
+                password_hash,
+                role,
+                token_version,
+                mfa_enabled,
+                mfa_totp_secret_encrypted,
+                mfa_enabled_at,
+                mfa_updated_at,
+                created_at
+            ) VALUES (?, ?, ?, 0, 0, NULL, NULL, NULL, ?)
+            """,
             (username, password_hash, role, now),
         )
         return int(cur.lastrowid)
@@ -482,6 +632,518 @@ def upsert_admin(username: str, password_hash: str) -> None:
     if existing:
         return
     create_user(username=username, password_hash=password_hash, role="admin")
+
+
+def issue_app_proof_challenge(
+    *,
+    challenge_id: str,
+    purpose: str,
+    platform: str,
+    installation_id: str,
+    username_hint: str | None,
+    challenge_nonce: str,
+    expires_in_seconds: int,
+    client_ip: str | None,
+    app_version: str | None,
+    os_version: str | None,
+) -> sqlite3.Row:
+    now = datetime.now(UTC)
+    expires_at = now + timedelta(seconds=expires_in_seconds)
+    with get_conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO app_proof_challenges(
+                id,
+                purpose,
+                platform,
+                installation_id,
+                username_hint,
+                challenge_nonce,
+                app_version,
+                os_version,
+                client_ip,
+                expires_at,
+                consumed_at,
+                created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
+            """,
+            (
+                challenge_id,
+                purpose,
+                platform,
+                installation_id,
+                username_hint,
+                challenge_nonce,
+                app_version,
+                os_version,
+                client_ip,
+                expires_at.isoformat(),
+                now.isoformat(),
+            ),
+        )
+        return conn.execute("SELECT * FROM app_proof_challenges WHERE id = ?", (challenge_id,)).fetchone()
+
+
+def get_app_proof_challenge(challenge_id: str) -> sqlite3.Row | None:
+    with get_conn() as conn:
+        return conn.execute("SELECT * FROM app_proof_challenges WHERE id = ?", (challenge_id,)).fetchone()
+
+
+def consume_app_proof_challenge(challenge_id: str) -> sqlite3.Row | None:
+    now = datetime.now(UTC).isoformat()
+    with get_conn() as conn:
+        cur = conn.execute(
+            """
+            UPDATE app_proof_challenges
+            SET consumed_at = ?
+            WHERE id = ? AND consumed_at IS NULL
+            """,
+            (now, challenge_id),
+        )
+        if cur.rowcount <= 0:
+            return None
+        return conn.execute("SELECT * FROM app_proof_challenges WHERE id = ?", (challenge_id,)).fetchone()
+
+
+def mark_app_proof_challenge_consumed(challenge_id: str, *, consume_even_if_missing: bool = True) -> bool:
+    now = datetime.now(UTC).isoformat()
+    with get_conn() as conn:
+        cur = conn.execute(
+            """
+            UPDATE app_proof_challenges
+            SET consumed_at = COALESCE(consumed_at, ?)
+            WHERE id = ?
+            """,
+            (now, challenge_id),
+        )
+        if consume_even_if_missing:
+            return cur.rowcount > 0
+        row = conn.execute("SELECT consumed_at FROM app_proof_challenges WHERE id = ?", (challenge_id,)).fetchone()
+        return row is not None
+
+
+def get_app_installation(installation_id: str | None) -> sqlite3.Row | None:
+    if not installation_id:
+        return None
+    with get_conn() as conn:
+        return conn.execute("SELECT * FROM app_installations WHERE installation_id = ?", (installation_id,)).fetchone()
+
+
+def list_app_installations(
+    *,
+    user_id: int | None = None,
+    platform: str | None = None,
+    status: str | None = None,
+    limit: int | None = None,
+) -> list[sqlite3.Row]:
+    query = "SELECT * FROM app_installations"
+    filters: list[str] = []
+    params: list[object] = []
+    if user_id is not None:
+        filters.append("user_id = ?")
+        params.append(user_id)
+    if platform is not None:
+        filters.append("platform = ?")
+        params.append(platform)
+    if status is not None:
+        filters.append("status = ?")
+        params.append(status)
+    if filters:
+        query += " WHERE " + " AND ".join(filters)
+    query += " ORDER BY updated_at DESC, installation_id ASC"
+    if limit is not None:
+        query += " LIMIT ?"
+        params.append(limit)
+    with get_conn() as conn:
+        return list(conn.execute(query, tuple(params)).fetchall())
+
+
+def _upsert_app_installation(
+    *,
+    installation_id: str,
+    platform: str,
+    status: str,
+    proof_method: str,
+    app_id: str | None,
+    app_version: str | None,
+    os_version: str | None,
+    client_ip: str | None,
+    provider_status: str | None,
+    provider_error: str | None,
+    verdict_json: str | None,
+) -> sqlite3.Row:
+    now = datetime.now(UTC).isoformat()
+    with get_conn() as conn:
+        existing = conn.execute(
+            "SELECT installation_id, session_version FROM app_installations WHERE installation_id = ?",
+            (installation_id,),
+        ).fetchone()
+        if existing:
+            conn.execute(
+                """
+                UPDATE app_installations
+                SET platform = ?,
+                    status = CASE WHEN status = 'revoked' THEN status ELSE ? END,
+                    proof_method = ?,
+                    app_id = ?,
+                    app_version = ?,
+                    os_version = ?,
+                    last_verified_at = ?,
+                    last_seen_ip = ?,
+                    last_provider_status = ?,
+                    last_provider_error = ?,
+                    last_verdict_json = ?,
+                    last_failure_reason = NULL,
+                    last_failure_detail = NULL,
+                    last_failure_at = NULL,
+                    updated_at = ?
+                WHERE installation_id = ?
+                """,
+                (
+                    platform,
+                    status,
+                    proof_method,
+                    app_id,
+                    app_version,
+                    os_version,
+                    now,
+                    client_ip,
+                    provider_status,
+                    provider_error,
+                    verdict_json,
+                    now,
+                    installation_id,
+                ),
+            )
+        else:
+            conn.execute(
+                """
+                INSERT INTO app_installations(
+                    installation_id,
+                    platform,
+                    status,
+                    user_id,
+                    session_version,
+                    proof_method,
+                    app_id,
+                    app_version,
+                    os_version,
+                    last_verified_at,
+                    last_login_at,
+                    last_seen_ip,
+                    last_provider_status,
+                    last_provider_error,
+                    last_verdict_json,
+                    last_failure_reason,
+                    last_failure_detail,
+                    last_failure_at,
+                    created_at,
+                    updated_at,
+                    revoked_at,
+                    revoked_reason
+                ) VALUES (?, ?, ?, NULL, 1, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?, NULL, NULL)
+                """,
+                (
+                    installation_id,
+                    platform,
+                    status,
+                    proof_method,
+                    app_id,
+                    app_version,
+                    os_version,
+                    now,
+                    client_ip,
+                    provider_status,
+                    provider_error,
+                    verdict_json,
+                    now,
+                    now,
+                ),
+            )
+        return conn.execute("SELECT * FROM app_installations WHERE installation_id = ?", (installation_id,)).fetchone()
+
+
+def record_android_attestation(
+    *,
+    installation_id: str,
+    app_id: str,
+    app_version: str | None,
+    os_version: str | None,
+    client_ip: str | None,
+    provider_status: str | None,
+    provider_error: str | None,
+    verdict_json: str | None,
+) -> sqlite3.Row:
+    return _upsert_app_installation(
+        installation_id=installation_id,
+        platform="android",
+        status="trusted",
+        proof_method="android_play_integrity",
+        app_id=app_id,
+        app_version=app_version,
+        os_version=os_version,
+        client_ip=client_ip,
+        provider_status=provider_status,
+        provider_error=provider_error,
+        verdict_json=verdict_json,
+    )
+
+
+def record_ios_app_attest_enrollment(
+    *,
+    installation_id: str,
+    key_id: str,
+    public_key_pem: str,
+    receipt_b64: str | None,
+    app_id: str,
+    app_version: str | None,
+    os_version: str | None,
+    client_ip: str | None,
+    provider_status: str | None,
+    provider_error: str | None,
+    verdict_json: str | None,
+) -> sqlite3.Row:
+    installation = _upsert_app_installation(
+        installation_id=installation_id,
+        platform="ios",
+        status="trusted",
+        proof_method="ios_app_attest",
+        app_id=app_id,
+        app_version=app_version,
+        os_version=os_version,
+        client_ip=client_ip,
+        provider_status=provider_status,
+        provider_error=provider_error,
+        verdict_json=verdict_json,
+    )
+    now = datetime.now(UTC).isoformat()
+    with get_conn() as conn:
+        existing = conn.execute(
+            "SELECT installation_id FROM ios_app_attest_keys WHERE installation_id = ?",
+            (installation_id,),
+        ).fetchone()
+        if existing:
+            conn.execute(
+                """
+                UPDATE ios_app_attest_keys
+                SET key_id = ?,
+                    public_key_pem = ?,
+                    sign_count = 0,
+                    receipt_b64 = ?,
+                    updated_at = ?
+                WHERE installation_id = ?
+                """,
+                (key_id, public_key_pem, receipt_b64, now, installation_id),
+            )
+        else:
+            conn.execute(
+                """
+                INSERT INTO ios_app_attest_keys(
+                    installation_id,
+                    key_id,
+                    public_key_pem,
+                    sign_count,
+                    receipt_b64,
+                    last_asserted_at,
+                    created_at,
+                    updated_at
+                ) VALUES (?, ?, ?, 0, ?, NULL, ?, ?)
+                """,
+                (installation_id, key_id, public_key_pem, receipt_b64, now, now),
+            )
+    return installation
+
+
+def get_ios_app_attest_key(installation_id: str) -> sqlite3.Row | None:
+    with get_conn() as conn:
+        return conn.execute(
+            "SELECT * FROM ios_app_attest_keys WHERE installation_id = ?",
+            (installation_id,),
+        ).fetchone()
+
+
+def record_ios_app_attest_assertion(
+    *,
+    installation_id: str,
+    sign_count: int,
+    app_version: str | None,
+    os_version: str | None,
+    client_ip: str | None,
+    provider_status: str | None,
+    provider_error: str | None,
+    verdict_json: str | None,
+) -> sqlite3.Row:
+    now = datetime.now(UTC).isoformat()
+    with get_conn() as conn:
+        conn.execute(
+            """
+            UPDATE ios_app_attest_keys
+            SET sign_count = ?,
+                last_asserted_at = ?,
+                updated_at = ?
+            WHERE installation_id = ?
+            """,
+            (sign_count, now, now, installation_id),
+        )
+        conn.execute(
+            """
+            UPDATE app_installations
+            SET status = CASE WHEN status = 'revoked' THEN status ELSE 'trusted' END,
+                proof_method = 'ios_app_attest',
+                app_version = COALESCE(?, app_version),
+                os_version = COALESCE(?, os_version),
+                last_verified_at = ?,
+                last_seen_ip = ?,
+                last_provider_status = ?,
+                last_provider_error = ?,
+                last_verdict_json = ?,
+                last_failure_reason = NULL,
+                last_failure_detail = NULL,
+                last_failure_at = NULL,
+                updated_at = ?
+            WHERE installation_id = ?
+            """,
+            (
+                app_version,
+                os_version,
+                now,
+                client_ip,
+                provider_status,
+                provider_error,
+                verdict_json,
+                now,
+                installation_id,
+            ),
+        )
+        return conn.execute("SELECT * FROM app_installations WHERE installation_id = ?", (installation_id,)).fetchone()
+
+
+def update_installation_after_login(*, installation_id: str, user_id: int, client_ip: str | None) -> sqlite3.Row:
+    now = datetime.now(UTC).isoformat()
+    with get_conn() as conn:
+        conn.execute(
+            """
+            UPDATE app_installations
+            SET user_id = ?,
+                last_login_at = ?,
+                last_seen_ip = ?,
+                updated_at = ?
+            WHERE installation_id = ?
+            """,
+            (user_id, now, client_ip, now, installation_id),
+        )
+        return conn.execute("SELECT * FROM app_installations WHERE installation_id = ?", (installation_id,)).fetchone()
+
+
+def record_app_installation_failure(
+    *,
+    installation_id: str,
+    platform: str,
+    reason: str,
+    detail: str,
+    client_ip: str | None,
+    provider_status: str | None = None,
+    provider_error: str | None = None,
+) -> sqlite3.Row:
+    now = datetime.now(UTC).isoformat()
+    with get_conn() as conn:
+        existing = conn.execute(
+            "SELECT installation_id FROM app_installations WHERE installation_id = ?",
+            (installation_id,),
+        ).fetchone()
+        effective_provider_status = provider_status or "rejected"
+        effective_provider_error = provider_error or reason
+        if existing:
+            conn.execute(
+                """
+                UPDATE app_installations
+                SET platform = ?,
+                    last_seen_ip = ?,
+                    last_provider_status = ?,
+                    last_provider_error = ?,
+                    last_failure_reason = ?,
+                    last_failure_detail = ?,
+                    last_failure_at = ?,
+                    updated_at = ?
+                WHERE installation_id = ?
+                """,
+                (
+                    platform,
+                    client_ip,
+                    effective_provider_status,
+                    effective_provider_error,
+                    reason,
+                    detail,
+                    now,
+                    now,
+                    installation_id,
+                ),
+            )
+        else:
+            conn.execute(
+                """
+                INSERT INTO app_installations(
+                    installation_id,
+                    platform,
+                    status,
+                    user_id,
+                    session_version,
+                    proof_method,
+                    app_id,
+                    app_version,
+                    os_version,
+                    last_verified_at,
+                    last_login_at,
+                    last_seen_ip,
+                    last_provider_status,
+                    last_provider_error,
+                    last_verdict_json,
+                    last_failure_reason,
+                    last_failure_detail,
+                    last_failure_at,
+                    created_at,
+                    updated_at,
+                    revoked_at,
+                    revoked_reason
+                ) VALUES (?, ?, 'pending', NULL, 1, NULL, NULL, NULL, NULL, NULL, NULL, ?, ?, ?, NULL, ?, ?, ?, ?, ?, NULL, NULL)
+                """,
+                (
+                    installation_id,
+                    platform,
+                    client_ip,
+                    effective_provider_status,
+                    effective_provider_error,
+                    reason,
+                    detail,
+                    now,
+                    now,
+                    now,
+                ),
+            )
+        return conn.execute("SELECT * FROM app_installations WHERE installation_id = ?", (installation_id,)).fetchone()
+
+
+def revoke_app_installation(installation_id: str, *, reason: str | None) -> sqlite3.Row | None:
+    now = datetime.now(UTC).isoformat()
+    with get_conn() as conn:
+        cur = conn.execute(
+            """
+            UPDATE app_installations
+            SET status = 'revoked',
+                session_version = COALESCE(session_version, 0) + 1,
+                last_failure_reason = 'revoked',
+                last_failure_detail = COALESCE(?, ''),
+                last_failure_at = ?,
+                revoked_at = ?,
+                revoked_reason = ?,
+                updated_at = ?
+            WHERE installation_id = ?
+            """,
+            (reason, now, now, reason, now, installation_id),
+        )
+        if cur.rowcount <= 0:
+            return None
+        return conn.execute("SELECT * FROM app_installations WHERE installation_id = ?", (installation_id,)).fetchone()
 
 
 _DEVICE_SELECT_COLUMNS = """

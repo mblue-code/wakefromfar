@@ -62,7 +62,7 @@ enum AppLanguage: String, CaseIterable, Identifiable {
 }
 
 final class AppPreferences {
-    static let defaultBackendURL = "http://100.100.100.100:8080"
+    static let defaultBackendURL = ""
 
     private enum Keys {
         static let backendURL = "backend_url"
@@ -70,7 +70,6 @@ final class AppPreferences {
         static let appearance = "appearance"
         static let language = "language"
         static let firstRunGuidanceAcknowledged = "first_run_guidance_acknowledged"
-        static let notificationInstallationID = "notification_installation_id"
         static let notificationDeviceToken = "notification_device_token"
     }
 
@@ -128,21 +127,6 @@ final class AppPreferences {
         }
         set {
             userDefaults.set(newValue, forKey: Keys.firstRunGuidanceAcknowledged)
-        }
-    }
-
-    var notificationInstallationID: String {
-        get {
-            if let existing = userDefaults.string(forKey: Keys.notificationInstallationID),
-               !existing.isEmpty {
-                return existing
-            }
-            let generated = UUID().uuidString.lowercased()
-            userDefaults.set(generated, forKey: Keys.notificationInstallationID)
-            return generated
-        }
-        set {
-            userDefaults.set(newValue.trimmingCharacters(in: .whitespacesAndNewlines), forKey: Keys.notificationInstallationID)
         }
     }
 

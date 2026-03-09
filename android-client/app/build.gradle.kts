@@ -22,12 +22,14 @@ android {
     }
 
     defaultConfig {
+        val playIntegrityProjectNumber = System.getenv("WFF_PLAY_INTEGRITY_CLOUD_PROJECT_NUMBER") ?: ""
         applicationId = "com.wakefromfar.wolrelay"
         minSdk = 26
         targetSdk = 35
         versionCode = 1
         versionName = "0.1.0"
         manifestPlaceholders["usesCleartextTraffic"] = "true"
+        buildConfigField("String", "PLAY_INTEGRITY_CLOUD_PROJECT_NUMBER", "\"$playIntegrityProjectNumber\"")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -63,6 +65,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }
 
@@ -89,7 +92,9 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.0")
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
     implementation("com.android.billingclient:billing-ktx:6.2.1")
+    implementation("com.google.android.play:integrity:1.6.0")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     testImplementation("junit:junit:4.13.2")
+    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
 }

@@ -48,7 +48,8 @@ final class DevicesViewModel: ObservableObject {
         do {
             allVisibleDevices = sortDevicesForPresentation(try await apiClient.fetchMyDevices(
                 baseURL: session.backendURL,
-                token: session.token
+                token: session.token,
+                installationID: session.installationID
             ))
             guard isCurrentSession(session) else { return }
             applyDevicePresentation(allVisibleDevices)
@@ -79,7 +80,8 @@ final class DevicesViewModel: ObservableObject {
                 hostID: device.id,
                 isFavorite: !device.isFavorite,
                 baseURL: session.backendURL,
-                token: session.token
+                token: session.token,
+                installationID: session.installationID
             )
             guard isCurrentSession(session) else { return }
             allVisibleDevices = sortDevicesForPresentation(
@@ -113,7 +115,8 @@ final class DevicesViewModel: ObservableObject {
             let response = try await apiClient.wakeDevice(
                 hostID: device.id,
                 baseURL: session.backendURL,
-                token: session.token
+                token: session.token,
+                installationID: session.installationID
             )
             guard isCurrentSession(session) else { return }
             switch response.result {
@@ -185,7 +188,8 @@ final class DevicesViewModel: ObservableObject {
                 hostID: device.id,
                 message: trimmedNote,
                 baseURL: session.backendURL,
-                token: session.token
+                token: session.token,
+                installationID: session.installationID
             )
             guard isCurrentSession(session) else { return }
             feedbackMessage = .localized("devices_shutdown_result_success")

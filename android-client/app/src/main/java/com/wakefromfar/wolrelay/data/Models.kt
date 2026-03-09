@@ -7,12 +7,55 @@ import kotlinx.serialization.json.JsonObject
 data class LoginRequest(
     val username: String,
     val password: String,
+    val installation_id: String? = null,
+    val proof_ticket: String? = null,
 )
 
 @Serializable
 data class LoginResponse(
     val token: String,
     val expires_in: Int,
+)
+
+@Serializable
+data class AppProofChallengeRequest(
+    val platform: String,
+    val purpose: String,
+    val installation_id: String,
+    val username: String? = null,
+    val app_version: String? = null,
+    val os_version: String? = null,
+)
+
+@Serializable
+data class AppProofChallengeBinding(
+    val canonical_fields: List<String>,
+)
+
+@Serializable
+data class AppProofChallengeResponse(
+    val challenge_id: String,
+    val challenge: String,
+    val purpose: String,
+    val expires_in: Int,
+    val binding: AppProofChallengeBinding,
+)
+
+@Serializable
+data class AndroidAppProofVerifyRequest(
+    val challenge_id: String,
+    val installation_id: String,
+    val request_hash: String,
+    val integrity_token: String,
+    val app_version: String? = null,
+    val os_version: String? = null,
+)
+
+@Serializable
+data class AppProofVerifyResponse(
+    val proof_ticket: String,
+    val proof_expires_in: Int,
+    val installation_status: String,
 )
 
 @Serializable

@@ -15,6 +15,7 @@ Current repo stance for the clean-slate refactor:
 - schema changes should prefer DB rebuilds over preserving historical local SQLite states
 - the canonical local reset flow lives in `/Users/max/projekte/wakefromfar/docs/local-reset-workflow.md`
 - the production-style sections below describe runtime topology, not a requirement to preserve backward-compatible schema/data rollout
+- Sprint-8 pre-production verification is documented in `/Users/max/projekte/wakefromfar/docs/security-preproduction-checklist.md`
 
 Current supported product surface:
 
@@ -70,11 +71,96 @@ Minimum required to change:
 - `APP_SECRET`
 - `ADMIN_PASS`
 
+Exposure guardrails:
+
+- Bottom line for operators:
+  - Reverse proxy is optional.
+  - DNS is optional.
+  - A trusted HTTPS endpoint is the normal deployment target for mobile clients.
+  - If clients connect directly to an IP, the certificate must include that IP as a SAN and the devices must trust it.
+  - Private-network HTTP remains an explicit exception path, not the recommended default for mobile app access.
+- The backend now fails closed by default.
+- `ENFORCE_IP_ALLOWLIST=true` is the code-level default.
+- `IP_ALLOWLIST_CIDRS` must contain at least one valid CIDR when allowlisting is enabled.
+- `REQUIRE_TLS_FOR_AUTH=true` is the code-level default.
+- `ALLOW_INSECURE_PRIVATE_HTTP=true` only permits HTTP for auth/authenticated flows when the client IP is also inside `PRIVATE_HTTP_ALLOWED_CIDRS`.
+- Default `PRIVATE_HTTP_ALLOWED_CIDRS`: `127.0.0.1/32`, `::1/128`, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `100.64.0.0/10`, `fd7a:115c:a1e0::/48`.
+- `ADMIN_UI_ENABLED=true` is the code-level default for the browser admin surface.
+- `ADMIN_IP_ALLOWLIST_CIDRS` is a second, narrower fence for the admin plane only.
+- Admin plane means `/admin/*` and `/admin/ui/*`.
+- Default `ADMIN_IP_ALLOWLIST_CIDRS`: `127.0.0.1/32`, `::1/128`, `100.64.0.0/10`, `fd7a:115c:a1e0::/48`.
+- Keep `ADMIN_IP_ALLOWLIST_CIDRS` narrower than `IP_ALLOWLIST_CIDRS` whenever possible.
+- When `ADMIN_UI_ENABLED=false`, `/admin/ui/*` returns `404`, `/` no longer redirects into the admin UI, and `/admin/*` APIs remain available behind admin auth plus the admin allowlist.
+- Browser-admin MFA rollout defaults to safe upgrade mode: `ADMIN_MFA_REQUIRED=false`.
+- `ADMIN_MFA_ISSUER=WakeFromFar` controls the authenticator-app issuer/label.
+- `ADMIN_MFA_PENDING_EXPIRES_SECONDS=300` limits pending login/setup cookies.
+- `ADMIN_MFA_VERIFY_RATE_LIMIT_PER_MINUTE=10` limits TOTP verification attempts.
+- Sprint 6 architecture decision for mobile "only our apps" proof is documented in `docs/mobile-app-proof-architecture.md`.
+- Sprint 7 app-proof is now implemented and staged behind `APP_PROOF_MODE`.
+- `APP_PROOF_MODE=disabled|report_only|soft_enforce|enforce_login` controls whether mobile bearer-session issuance is only observed, softly enforced, or hard blocked without proof.
+- `APP_PROOF_CHALLENGE_TTL_SECONDS=300` controls one-time challenge lifetime.
+- `APP_PROOF_DEGRADED_GRACE_SECONDS=86400` defines the bounded soft-enforce grace window for previously trusted installations.
+- `APP_PROOF_REQUIRE_ON_ADMIN_BEARER_LOGIN=false` is the Sprint-7 default; browser-admin MFA remains unchanged and admin bearer-token app-proof rollout is deferred by default one step behind mobile user rollout.
+- Android verification needs `APP_PROOF_ANDROID_PACKAGE_NAME`, `APP_PROOF_ANDROID_ALLOWED_CERT_SHA256`, `APP_PROOF_ANDROID_CLOUD_PROJECT_NUMBER`, and either `APP_PROOF_ANDROID_SERVICE_ACCOUNT_JSON` or `APP_PROOF_ANDROID_SERVICE_ACCOUNT_JSON_PATH`.
+- iOS verification needs `APP_PROOF_IOS_TEAM_ID` and `APP_PROOF_IOS_BUNDLE_ID`; `APP_PROOF_IOS_ALLOW_DEVICECHECK_REPORT_ONLY=true` only documents that DeviceCheck may be logged later, not enforced.
+- When `ADMIN_MFA_REQUIRED=false`, non-enrolled browser admins may still log in with password-only, but already enrolled browser admins are still challenged for TOTP.
+- When `ADMIN_MFA_REQUIRED=true`, non-enrolled browser admins are restricted to MFA setup until TOTP is enabled; they do not receive a full `admin_session` first.
+- Public HTTP auth is blocked even if you intentionally disable the broader IP allowlist for testing.
+- If you intentionally want an unsafe local/testing/manual setup, set `ENFORCE_IP_ALLOWLIST=false` and `ALLOW_UNSAFE_PUBLIC_EXPOSURE=true`.
+- `ALLOW_UNSAFE_PUBLIC_EXPOSURE=true` is an explicit escape hatch only; it is unsafe and not recommended.
+- Product recommendation is unchanged: private-network-only deployment remains the intended model.
+
 Proxy-related variables:
 
 - `TRUST_PROXY_HEADERS=false` if clients connect directly to backend
 - `TRUST_PROXY_HEADERS=true` if backend sits behind reverse proxy
 - `TRUSTED_PROXY_CIDRS` must contain only proxy source networks
+
+Startup validation notes:
+
+- `ENFORCE_IP_ALLOWLIST=false` without `ALLOW_UNSAFE_PUBLIC_EXPOSURE=true` will fail startup.
+- Empty `IP_ALLOWLIST_CIDRS` values will fail startup.
+- Malformed `IP_ALLOWLIST_CIDRS` entries will fail startup instead of being ignored.
+- Empty `ADMIN_IP_ALLOWLIST_CIDRS` values will fail startup unless `ALLOW_UNSAFE_PUBLIC_EXPOSURE=true` is explicitly set.
+- Malformed `ADMIN_IP_ALLOWLIST_CIDRS` entries will fail startup instead of being ignored, unless `ALLOW_UNSAFE_PUBLIC_EXPOSURE=true` is explicitly set for an acknowledged unsafe setup.
+- Malformed `PRIVATE_HTTP_ALLOWED_CIDRS` entries will fail startup instead of silently widening or disabling the private HTTP exception.
+
+Auth transport policy:
+
+- `POST /auth/login` requires HTTPS unless `REQUIRE_TLS_FOR_AUTH=false`, or the request is plain HTTP from an allowed private CIDR and `ALLOW_INSECURE_PRIVATE_HTTP=true`.
+- Bearer-authenticated `/me/*` and `/admin/*` requests follow the same rule.
+- Admin UI session login and session-backed pages/actions follow the same rule.
+- `/admin/*` and `/admin/ui/*` also require the client IP to match `ADMIN_IP_ALLOWLIST_CIDRS`, using the same trusted-proxy client-IP resolution as the rest of the backend.
+- Browser-admin POSTs under `/admin/ui/*` also require a valid server-issued CSRF token, including `/admin/ui/login`.
+- Browser-admin POSTs under `/admin/ui/*` also require same-origin browser metadata: `Origin` must match the effective admin origin, and only when `Origin` is absent will a strict same-origin `Referer` be accepted.
+- Pending MFA verify/setup routes inherit the same admin-plane controls: admin allowlist, HTTPS/auth transport policy, CSRF, and same-origin checks.
+- Sprint 5 intentionally hardens the browser admin UI first. `POST /auth/login` for admin bearer-token issuance remains password-only in this release and still needs a later MFA design.
+- These browser checks are defense-in-depth on top of `ADMIN_IP_ALLOWLIST_CIDRS`, HTTPS/auth transport policy, and the existing `HttpOnly` + `SameSite=Strict` admin cookies.
+- Rejected admin-plane requests return `403` with `Admin access is not allowed from this network`.
+- Rejected requests return `403` with an explicit HTTPS-required message.
+- This transport policy does not make public internet exposure a supported deployment model.
+
+App-proof rollout notes:
+
+- Enforcement point in Sprint 7 is mobile bearer-token login/session issuance, not every authenticated request.
+- Official mobile clients first request `/auth/app-proof/challenge`, then submit platform proof, then call `/auth/login` with `installation_id` plus a short-lived `proof_ticket`.
+- Successful mobile sessions are bound to installation records and later requests must present `X-WFF-Installation-ID` that matches the JWT installation claims.
+- `soft_enforce` allows only bounded degraded login for previously trusted installations; first-seen or revoked installations are still denied.
+- `enforce_login` blocks new mobile bearer sessions without valid proof.
+- Revocation is available through `GET /admin/app-installations` and `POST /admin/app-installations/{installation_id}/revoke`.
+- This does not yet implement all-request proof-of-possession, mTLS, or DeviceCheck-as-enforcement.
+
+Operator diagnostics and readiness:
+
+- `GET /admin/security-status` is the primary Sprint-8 operator snapshot:
+  - hardening mode summary
+  - risky-but-allowed warnings
+  - explicit deferred items
+  - app-proof installation counts by platform/state
+  - recent app-proof failure categories
+- `GET /admin/metrics` now includes both runtime counters and the same security-status snapshot.
+- `GET /admin/app-installations?platform=android|ios&status=pending|trusted|report_only|revoked&limit=100` is the read-only installation inspection API.
+- Use these endpoints during fresh deployment and beta verification. Do not build migration plans around old installations; there are no production users/systems yet.
 
 Examples:
 
@@ -87,11 +173,29 @@ Examples:
 This repository uses `network_mode: host` for the backend, which is ideal for WoL broadcast traffic.
 The backend image itself runs as the non-root user `appuser`; host networking is used for LAN reachability, not because the process runs as root.
 
+Important for operators:
+
+- "No reverse proxy" does not mean "no TLS".
+- For standard phone/app usage, expose the backend through a trusted HTTPS endpoint even if the backend is reached directly on its own port.
+- If you expose the backend directly by IP, the certificate must cover that IP address as a SAN and be trusted by the client devices.
+- `ALLOW_INSECURE_PRIVATE_HTTP=true` preserves a private-network HTTP exception, but that is an explicit compatibility/controlled-lab path rather than the recommended mobile deployment model.
+
 Steps:
 
 ```bash
 cp .env.example .env
 # edit .env:
+# ENFORCE_IP_ALLOWLIST=true
+# IP_ALLOWLIST_CIDRS=100.64.0.0/10,fd7a:115c:a1e0::/48,127.0.0.1/32,::1/128
+# REQUIRE_TLS_FOR_AUTH=true
+# ALLOW_INSECURE_PRIVATE_HTTP=true
+# PRIVATE_HTTP_ALLOWED_CIDRS=127.0.0.1/32,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10,fd7a:115c:a1e0::/48
+# ADMIN_UI_ENABLED=true
+# ADMIN_IP_ALLOWLIST_CIDRS=127.0.0.1/32,::1/128,100.64.0.0/10,fd7a:115c:a1e0::/48
+# ADMIN_MFA_REQUIRED=false
+# ADMIN_MFA_ISSUER=WakeFromFar
+# ADMIN_MFA_PENDING_EXPIRES_SECONDS=300
+# ADMIN_MFA_VERIFY_RATE_LIMIT_PER_MINUTE=10
 # TRUST_PROXY_HEADERS=false
 docker compose up -d --build
 ```
@@ -101,6 +205,17 @@ Minimal compose variant:
 ```bash
 cp .env.example .env
 # edit .env:
+# ENFORCE_IP_ALLOWLIST=true
+# IP_ALLOWLIST_CIDRS=100.64.0.0/10,fd7a:115c:a1e0::/48,127.0.0.1/32,::1/128
+# REQUIRE_TLS_FOR_AUTH=true
+# ALLOW_INSECURE_PRIVATE_HTTP=true
+# PRIVATE_HTTP_ALLOWED_CIDRS=127.0.0.1/32,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10,fd7a:115c:a1e0::/48
+# ADMIN_UI_ENABLED=true
+# ADMIN_IP_ALLOWLIST_CIDRS=127.0.0.1/32,::1/128,100.64.0.0/10,fd7a:115c:a1e0::/48
+# ADMIN_MFA_REQUIRED=false
+# ADMIN_MFA_ISSUER=WakeFromFar
+# ADMIN_MFA_PENDING_EXPIRES_SECONDS=300
+# ADMIN_MFA_VERIFY_RATE_LIMIT_PER_MINUTE=10
 # TRUST_PROXY_HEADERS=false
 docker compose -f docker-compose.simple.yml up -d --build
 ```
@@ -182,12 +297,29 @@ For local refactor work, prefer rebuilding the testing volume instead of carryin
 In `.env`:
 
 ```env
+ENFORCE_IP_ALLOWLIST=true
+IP_ALLOWLIST_CIDRS=<trusted-client-networks>
+ADMIN_UI_ENABLED=true
+ADMIN_IP_ALLOWLIST_CIDRS=<narrower-admin-networks>
+ADMIN_MFA_REQUIRED=false
+ADMIN_MFA_ISSUER=WakeFromFar
 TRUST_PROXY_HEADERS=true
 TRUSTED_PROXY_CIDRS=<your-proxy-network>
+REQUIRE_TLS_FOR_AUTH=true
+ALLOW_INSECURE_PRIVATE_HTTP=false
 ```
 
 Important:
 
+- Do not disable the allowlist for normal deployments.
+- Keep `ADMIN_IP_ALLOWLIST_CIDRS` narrower than the broader app/client allowlist.
+- If you do not need the browser UI on a server, set `ADMIN_UI_ENABLED=false` rather than leaving `/admin/ui/*` exposed.
+- Enable `ADMIN_MFA_REQUIRED=true` only after at least one browser admin has enrolled TOTP, or be prepared to complete enrollment immediately on next login.
+- Recovery is shell-based by design for self-hosted installs: `python -m app.cli admin-disable-mfa --username <adminname>`.
+- If you publish the admin UI behind a reverse proxy, preserve the original scheme and host so same-origin `Origin` checks keep matching the browser-visible admin URL.
+- For internet-facing reverse proxies, keep `ALLOW_INSECURE_PRIVATE_HTTP=false` so login and authenticated traffic require end-user HTTPS.
+- Admin API bearer-token issuance via `POST /auth/login` remains outside the Sprint-5 MFA enforcement scope, so protect that path with the same private-network-first stance and admin-plane network fencing.
+- If you bypass allowlisting for local/manual testing, you must also set `ALLOW_UNSAFE_PUBLIC_EXPOSURE=true`, and that mode remains unsupported for public exposure.
 - Never set overly broad proxy CIDRs.
 - Only trust IP ranges where your reverse proxy actually runs.
 
@@ -199,6 +331,11 @@ Proxy must forward:
 - `X-Real-IP`
 - `X-Forwarded-Proto`
 - `Host`
+
+The backend only trusts `X-Forwarded-Proto=https` when both conditions are true:
+
+- `TRUST_PROXY_HEADERS=true`
+- the direct peer is inside `TRUSTED_PROXY_CIDRS`
 
 ### 5.3 NGINX example
 
@@ -298,8 +435,18 @@ export ADMIN_USER='admin'
 export ADMIN_PASS='replace-me-with-a-strong-password'
 export DATA_DIR='/opt/wakefromfar/data'
 export DB_FILENAME='wol.db'
+export ENFORCE_IP_ALLOWLIST='true'
+export IP_ALLOWLIST_CIDRS='100.64.0.0/10,fd7a:115c:a1e0::/48,127.0.0.1/32,::1/128'
+export ADMIN_UI_ENABLED='true'
+export ADMIN_IP_ALLOWLIST_CIDRS='127.0.0.1/32,::1/128,100.64.0.0/10,fd7a:115c:a1e0::/48'
 export TRUST_PROXY_HEADERS='false'
 ```
+
+Important:
+
+- For direct non-proxy mobile access, plan for a trusted HTTPS endpoint on the backend itself.
+- Reverse proxy and DNS are optional, but a certificate-backed HTTPS endpoint is still the practical requirement for normal mobile use.
+- Plain HTTP on a private IP remains an explicit operator exception path, not the recommended default.
 
 ### 6.3 Start server
 
@@ -312,6 +459,10 @@ uvicorn app.main:app --host 0.0.0.0 --port 8080
 Use same backend setup as Section 6, but set:
 
 ```bash
+export ENFORCE_IP_ALLOWLIST='true'
+export IP_ALLOWLIST_CIDRS='<trusted-client-networks>'
+export ADMIN_UI_ENABLED='true'
+export ADMIN_IP_ALLOWLIST_CIDRS='<narrower-admin-networks>'
 export TRUST_PROXY_HEADERS='true'
 export TRUSTED_PROXY_CIDRS='127.0.0.1/32,::1/128'
 ```

@@ -155,7 +155,8 @@ final class AdminActivityViewModel: ObservableObject {
                 token: session.token,
                 cursor: nil,
                 limit: pageSize,
-                typeFilter: selectedFilter.backendTypeFilter
+                typeFilter: selectedFilter.backendTypeFilter,
+                installationID: session.installationID
             )
             guard isCurrentSession(session) else { return }
             guard !Task.isCancelled else { return }
@@ -187,7 +188,8 @@ final class AdminActivityViewModel: ObservableObject {
                 token: session.token,
                 cursor: cursor,
                 limit: pageSize,
-                typeFilter: selectedFilter.backendTypeFilter
+                typeFilter: selectedFilter.backendTypeFilter,
+                installationID: session.installationID
             )
             guard isCurrentSession(session) else { return }
             guard !Task.isCancelled else { return }
@@ -246,13 +248,15 @@ final class AdminActivityViewModel: ObservableObject {
                 updatedPoke = try await apiClient.markShutdownPokeSeen(
                     pokeID: pokeID,
                     baseURL: session.backendURL,
-                    token: session.token
+                    token: session.token,
+                    installationID: session.installationID
                 )
             case .markResolved:
                 updatedPoke = try await apiClient.markShutdownPokeResolved(
                     pokeID: pokeID,
                     baseURL: session.backendURL,
-                    token: session.token
+                    token: session.token,
+                    installationID: session.installationID
                 )
             }
             guard isCurrentSession(session) else { return }

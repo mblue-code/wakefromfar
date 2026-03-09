@@ -85,6 +85,7 @@ class AdminAlertForegroundService : Service() {
             token = token,
             limit = ACTIVITY_PAGE_SIZE,
             typeFilter = "poke",
+            installationId = prefs.getInstallationId(),
         )
         val latestEventId = events.maxOfOrNull { it.id }
         val previousNotifiedId = prefs.getLastNotifiedShutdownEventId()

@@ -3,6 +3,15 @@ import Foundation
 struct LoginRequest: Encodable {
     let username: String
     let password: String
+    let installationID: String?
+    let proofTicket: String?
+
+    enum CodingKeys: String, CodingKey {
+        case username
+        case password
+        case installationID = "installation_id"
+        case proofTicket = "proof_ticket"
+    }
 }
 
 struct LoginResponse: Decodable {
@@ -12,6 +21,84 @@ struct LoginResponse: Decodable {
     enum CodingKeys: String, CodingKey {
         case token
         case expiresIn = "expires_in"
+    }
+}
+
+struct AppProofChallengeRequest: Encodable {
+    let platform: String
+    let purpose: String
+    let installationID: String
+    let username: String?
+    let appVersion: String?
+    let osVersion: String?
+
+    enum CodingKeys: String, CodingKey {
+        case platform
+        case purpose
+        case installationID = "installation_id"
+        case username
+        case appVersion = "app_version"
+        case osVersion = "os_version"
+    }
+}
+
+struct AppProofChallengeBinding: Decodable {
+    let canonicalFields: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case canonicalFields = "canonical_fields"
+    }
+}
+
+struct AppProofChallengeResponse: Decodable {
+    let challengeID: String
+    let challenge: String
+    let purpose: String
+    let expiresIn: Int
+    let binding: AppProofChallengeBinding
+
+    enum CodingKeys: String, CodingKey {
+        case challengeID = "challenge_id"
+        case challenge
+        case purpose
+        case expiresIn = "expires_in"
+        case binding
+    }
+}
+
+struct IOSAppProofVerifyRequest: Encodable {
+    let mode: String
+    let challengeID: String
+    let installationID: String
+    let keyID: String
+    let attestationObject: String?
+    let assertionObject: String?
+    let receipt: String?
+    let appVersion: String?
+    let osVersion: String?
+
+    enum CodingKeys: String, CodingKey {
+        case mode
+        case challengeID = "challenge_id"
+        case installationID = "installation_id"
+        case keyID = "key_id"
+        case attestationObject = "attestation_object"
+        case assertionObject = "assertion_object"
+        case receipt
+        case appVersion = "app_version"
+        case osVersion = "os_version"
+    }
+}
+
+struct AppProofVerifyResponse: Decodable {
+    let proofTicket: String
+    let proofExpiresIn: Int
+    let installationStatus: String
+
+    enum CodingKeys: String, CodingKey {
+        case proofTicket = "proof_ticket"
+        case proofExpiresIn = "proof_expires_in"
+        case installationStatus = "installation_status"
     }
 }
 

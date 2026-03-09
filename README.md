@@ -10,6 +10,7 @@ Release-Dokumente:
 
 - `docs/ios-release-readiness.md` für den finalen iPhone/TestFlight/App-Store-Readiness-Status
 - `docs/release-gates.md` für die allgemeinen Backend-/Release-Gates
+- `docs/security-preproduction-checklist.md` für den ausführbaren Security-/Beta-Verifikationslauf vor externen Tests
 
 Aktueller Repo-Status für den Clean-Slate-Refactor:
 
@@ -37,6 +38,8 @@ Setup:
 ```bash
 cp .env.example .env
 # .env Werte setzen (APP_SECRET, ADMIN_PASS)
+# optional nur fuer lokale/manuale Unsafesets:
+# ALLOW_UNSAFE_PUBLIC_EXPOSURE=true und ENFORCE_IP_ALLOWLIST=false
 docker compose up -d --build
 ```
 
@@ -92,11 +95,60 @@ curl http://localhost:8080/health
 
 ### Security / Netzwerk
 
+- Bottom line fuer Betreiber:
+  - Reverse Proxy ist optional.
+  - Eigene DNS-Aufloesung ist optional.
+  - Fuer normalen Mobile-App-Betrieb braucht ihr aber praktisch einen vertrauenswuerdigen HTTPS-Endpunkt.
+  - Wenn Clients direkt per IP zugreifen, muss das Zertifikat diese IP als SAN enthalten und auf den Geraeten vertraut werden.
+  - Private-network-HTTP bleibt nur eine explizite Ausnahme fuer kontrollierte Setups und ist nicht der empfohlene Standardpfad fuer mobile Clients.
 - Kein Router Port-Forwarding.
-- Zugriff nur über Tailnet-IPs (Default: `ENFORCE_IP_ALLOWLIST=true`, `100.64.0.0/10` + Tailscale IPv6).
+- Das Backend failt jetzt standardmaessig closed: `ENFORCE_IP_ALLOWLIST=true` ist der Code-Default.
+- Zugriff bleibt private-network-first: Standard-Allowlist ist Tailscale + Loopback (`100.64.0.0/10`, `fd7a:115c:a1e0::/48`, `127.0.0.1/32`, `::1/128`).
+- Authentifizierung und bereits authentifizierter Traffic brauchen standardmaessig TLS: `REQUIRE_TLS_FOR_AUTH=true`.
+- Unsicheres HTTP fuer Login, Bearer-Auth und Admin-UI-Sessions ist nur als private Ausnahme moeglich: `ALLOW_INSECURE_PRIVATE_HTTP=true` plus `PRIVATE_HTTP_ALLOWED_CIDRS`.
+- Default fuer `PRIVATE_HTTP_ALLOWED_CIDRS`: `127.0.0.1/32`, `::1/128`, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `100.64.0.0/10`, `fd7a:115c:a1e0::/48`.
+- Die Admin-Plane ist jetzt separat eingegrenzt: `/admin/*` und `/admin/ui/*` verwenden zusaetzlich `ADMIN_IP_ALLOWLIST_CIDRS`.
+- Default fuer `ADMIN_IP_ALLOWLIST_CIDRS`: `127.0.0.1/32`, `::1/128`, `100.64.0.0/10`, `fd7a:115c:a1e0::/48`.
+- Empfehlung: `ADMIN_IP_ALLOWLIST_CIDRS` enger setzen als `IP_ALLOWLIST_CIDRS`, damit App-Clients nicht automatisch die Admin-Plane erreichen.
+- `ADMIN_UI_ENABLED=true` schaltet die Browser-Admin-Oberflaeche unter `/admin/ui/*`; bei `false` liefern diese Pfade `404`, waehrend `/admin/*`-APIs weiterlaufen und nur ueber die Admin-Allowlist erreichbar bleiben.
+- Browser-Admin-MFA ist jetzt verfuegbar: `ADMIN_MFA_REQUIRED=false` ist der sichere Upgrade-Default, damit bestehende Installationen nicht sofort ausgesperrt werden.
+- `ADMIN_MFA_ISSUER=WakeFromFar` steuert den Issuer fuer Authenticator-Apps; `ADMIN_MFA_PENDING_EXPIRES_SECONDS=300` begrenzt Pending-Login-/Setup-Zustaende; `ADMIN_MFA_VERIFY_RATE_LIMIT_PER_MINUTE=10` begrenzt TOTP-Pruefversuche.
+- Wenn `ADMIN_MFA_REQUIRED=false`, koennen nicht eingerichtete Browser-Admins weiter mit Passwort einloggen; bereits eingerichtete Admins muessen trotzdem TOTP bestaetigen.
+- Wenn `ADMIN_MFA_REQUIRED=true`, erhalten nicht eingerichtete Browser-Admins keine volle `admin_session`, sondern nur den eingeschraenkten MFA-Setup-Flow bis zur erfolgreichen TOTP-Aktivierung.
+- Sprint 6 hat die Mobile-App-Proof-Architektur als ADR festgelegt: `docs/mobile-app-proof-architecture.md`.
+- Sprint 7 ist jetzt implementiert: mobile Bearer-Session-Issuance kann ueber Platform Attestation (`Play Integrity` auf Android, `App Attest` auf iOS) gestuft aktiviert werden.
+- Rollout-Schalter: `APP_PROOF_MODE=disabled|report_only|soft_enforce|enforce_login`.
+- `disabled`: altes Verhalten, keine App-Proof-Enforcement.
+- `report_only`: Proof wird genutzt und protokolliert, fehlender/ungueltiger Proof blockiert Login noch nicht.
+- `soft_enforce`: neue oder unbekannte Installationen brauchen Proof; bereits vertraute Installationen duerfen nur innerhalb von `APP_PROOF_DEGRADED_GRACE_SECONDS` degradiert weiter einloggen.
+- `enforce_login`: mobile Bearer-Login ohne gueltigen Proof wird geblockt.
+- Android-Operator-Konfig: `APP_PROOF_ANDROID_PACKAGE_NAME`, `APP_PROOF_ANDROID_ALLOWED_CERT_SHA256`, `APP_PROOF_ANDROID_CLOUD_PROJECT_NUMBER`, plus Service-Account-JSON fuer serverseitiges Google-Decode.
+- iOS-Operator-Konfig: `APP_PROOF_IOS_TEAM_ID`, `APP_PROOF_IOS_BUNDLE_ID`; `DeviceCheck` bleibt nur report-only/telemetry und ist kein Enforcement-Ersatz.
+- Mobile Sessions werden jetzt an Installationen gebunden (`aid`/`apm`/`asv` im JWT, `X-WFF-Installation-ID` auf Client-Requests); revokte oder stale Installationen verlieren neue Sessions und koennen gebundene Sessions invalidieren.
+- Kleine Admin-API fuer Operatoren: `/admin/app-installations` und `/admin/app-installations/{installation_id}/revoke`.
+- Sprint 8 macht die Hardening-Layer operator-faehig:
+  - `GET /admin/security-status` liefert Hardening-Modus, Warnungen, Deferrals, App-Proof-Installationssummary und aktuelle Failure-Kategorien.
+  - `GET /admin/metrics` enthaelt weiter Runtime-Counter und jetzt zusaetzlich den Security-Status-Snapshot.
+  - `GET /admin/app-installations?platform=android|ios&status=...&limit=...` dient als read-only Installationsinspektion fuer Pre-Production/Beta.
+- Es gibt bewusst keine Migrationsschritte fuer bestehende Nutzer oder Installationen, weil noch keine Produktionsnutzung existiert.
+- Weiterhin explizit defert:
+  - all-request proof-of-possession
+  - mTLS
+  - DeviceCheck als Enforcement
+  - Admin-Bearer-Login-App-Proof als Default-Rollout
+- Browser-Admin-MFA aus Sprint 5 bleibt unveraendert.
+- Browserbasierte Admin-POSTs unter `/admin/ui/*` verlangen jetzt zusaetzlich einen serverseitig validierten CSRF-Token, auch fuer `/admin/ui/login`.
+- Browserbasierte Admin-POSTs verlangen ausserdem Same-Origin-Requests: `Origin` muss zum aktuellen Admin-Ursprung passen; falls ein Browser keinen `Origin` sendet, wird nur ein strikt gleich-originiger `Referer` als Fallback akzeptiert.
+- Das ist Defense-in-Depth auf `ADMIN_IP_ALLOWLIST_CIDRS`, TLS-/Transport-Checks und `SameSite=Strict`/`HttpOnly`-Cookies, ersetzt diese Kontrollen aber nicht.
+- Public HTTP fuer `POST /auth/login`, Bearer-geschuetzte `/me/*`-/`/admin/*`-Requests und Admin-UI-Login/Sessions wird mit `403` blockiert.
+- Admin-Bearer-Scope fuer Sprint 7 bleibt bewusst konservativ: Browser-Admin-UI/MFA bleibt wie bisher, und `APP_PROOF_REQUIRE_ON_ADMIN_BEARER_LOGIN=false` ist der Default, bis Telemetrie fuer mobile User-Logins stabil ist.
+- Operatoren muessen entweder eine gueltige `IP_ALLOWLIST_CIDRS` setzen oder explizit `ALLOW_UNSAFE_PUBLIC_EXPOSURE=true` zusammen mit `ENFORCE_IP_ALLOWLIST=false` setzen.
+- `ADMIN_IP_ALLOWLIST_CIDRS` muss ebenfalls gueltige CIDRs enthalten; leere oder fehlerhafte Werte stoppen den Start standardmaessig mit einer klaren Fehlermeldung.
+- `ALLOW_UNSAFE_PUBLIC_EXPOSURE=true` ist nur als Escape Hatch fuer lokale Tests/manuelle Setups gedacht, unsicher und nicht empfohlen.
 - Zusätzlich hostseitige Firewall-Regel auf `tailscale0` empfohlen.
 - Optional: Tailnet ACLs für Port `8080` auf den Server setzen.
 - Docker ist auf `network_mode: host` ausgelegt, damit WoL-Broadcasts im LAN/NIC-Routing zuverlässig funktionieren.
+- Das macht Public-Internet-Exposure nicht zu einem supporteten Setup; das Produkt bleibt private-network-first.
 
 ### Multi-NIC + Reverse Proxy
 
@@ -104,7 +156,8 @@ curl http://localhost:8080/health
 - Optional `interface` (z.B. `eth0`) setzen, um ein NIC explizit zu wählen.
 - Für Containerbetrieb und non-root Containerprozesse bevorzugt `source_ip` setzen (IP der passenden Host-NIC), da das stabil ohne zusätzliche Container-Caps funktioniert.
 - `interface` kann in manchen Umgebungen zusätzliche Netz-Capabilities erfordern, weil dafür ein Device-Bind versucht wird.
-- Hinter Reverse Proxy `TRUST_PROXY_HEADERS=true` und `TRUSTED_PROXY_CIDRS` auf die Proxy-IP/Netze setzen, damit Allowlist + Rate Limits die echte Client-IP nutzen.
+- Hinter Reverse Proxy `TRUST_PROXY_HEADERS=true` und `TRUSTED_PROXY_CIDRS` auf die Proxy-IP/Netze setzen, damit Allowlist, TLS-Erkennung (`X-Forwarded-Proto=https`) und Rate Limits die echte Client-IP nutzen.
+- Wenn Proxy-Header nicht vertraut werden, zaehlt `X-Forwarded-Proto=https` bewusst nicht als HTTPS-Nachweis.
 - Für mehrere Backend-Instanzen `RATE_LIMIT_BACKEND=redis` setzen und eine gemeinsame Redis-Instanz über `RATE_LIMIT_REDIS_URL` verwenden.
 - Sprint-4 Rate-Limits (per minute) are configurable via:
   - `SHUTDOWN_POKE_REQUEST_RATE_LIMIT_PER_MINUTE`
@@ -125,8 +178,17 @@ Für einen vollständigen lokalen Reset inklusive Neuaufbau von Admin, Test-User
 
 ### Admin Panel (Sprint 2)
 
-- URL: `http://localhost:8080/admin/ui/login`
+- Lokales Direktbeispiel auf dem Server selbst: `http://localhost:8080/admin/ui/login`
+- Fuer regulaeren entfernten Browser- oder Mobile-Zugriff sollte die sichtbare Backend-URL ein vertrauenswuerdiger HTTPS-Endpunkt sein.
 - Login mit Admin-User (`ADMIN_USER` / `ADMIN_PASS` oder API-angelegter Admin).
+- Browser-Admin ist jetzt hart abschaltbar ueber `ADMIN_UI_ENABLED=false`; dann liefern `/admin/ui`, `/admin/ui/login`, `/admin/ui/logout` und weitere `/admin/ui/*`-Pfade `404`.
+- Admin-Plane meint in diesem Repo immer `/admin/*` plus `/admin/ui/*`; beide laufen hinter `ADMIN_IP_ALLOWLIST_CIDRS`.
+- Alle browserseitigen Admin-Formulare tragen jetzt einen CSRF-Token; fehlende oder ungueltige Tokens liefern bei POSTs ein explizites `403 Invalid CSRF token`.
+- Cross-Origin-Form-Posts in die Admin-UI werden serverseitig geblockt; erlaubt sind nur same-originige Browser-Requests zum aktuellen Admin-Ursprung.
+- Browser-Admin-Login unterstuetzt jetzt TOTP-MFA. Die Einrichtung passiert in der UI ueber ein manuelles Secret plus `otpauth://`-URI; ein voller Browser-Admin-Login wird fuer eingerichtete Admins erst nach erfolgreicher TOTP-Pruefung ausgestellt.
+- Recovery fuer self-hosted Break-Glass: `python -m app.cli admin-disable-mfa --username <adminname>`.
+- Sprint-5-Scope bleibt bewusst begrenzt: `/auth/login` fuer Admin-Bearer-Tokens und mobile Admin-Clients bleiben vorerst unveraendert und noch ohne MFA-Challenge.
+- Mobile/Admin-API-Features wie `GET /admin/mobile/events` bleiben auch bei deaktivierter Browser-UI verfuegbar, sofern Auth und Admin-Allowlist passen.
 - User-Onboarding läuft manuell: Admin erstellt Benutzerkonten und übermittelt URL + Zugangsdaten sicher an Nutzer.
 - Verfügbare Seiten:
   - Users CRUD
@@ -158,8 +220,37 @@ Runbook/Release-Checklist:
 - `docs/sprint3-runbook-checklist.md`
 - `docs/deployment-guide.md` (Docker/non-Docker, with/without reverse proxy, multi-NIC WoL)
 - `docs/release-gates.md` (strict pre-testing and pre-production gates)
+- `docs/security-preproduction-checklist.md` (praktischer Sprint-8-Verifikationslauf fuer private Beta/Public-Test-Vorbereitung)
 
 ### Hardening / Sprint 4
+
+Browser-Admin-Defense-in-Depth:
+
+- `/admin/ui/*`-POSTs sind jetzt CSRF-geschuetzt und an die aktuelle Browser-Session gebunden.
+- `/admin/ui/*`-POSTs akzeptieren nur same-originige Browser-Requests (`Origin`, optional strenger `Referer`-Fallback).
+- Die bestehende Produktposition bleibt unveraendert: private-network-first, keine supportete Public-Internet-Exposure.
+
+### Hardening / Sprint 5
+
+Browser-Admin-MFA:
+
+- Browser-Admin-Accounts koennen jetzt TOTP-MFA einrichten und verwenden.
+- Secrets werden nicht roh im SQLite-User-Datensatz abgelegt, sondern vor dem Speichern mit einem aus `APP_SECRET` abgeleiteten Schluessel verschluesselt.
+- Login mit aktivierter MFA erstellt zuerst nur einen kurzlebigen Pending-State; die volle `admin_session` wird erst nach erfolgreicher TOTP-Pruefung gesetzt.
+- Bei `ADMIN_MFA_REQUIRED=true` werden nicht eingerichtete Browser-Admins direkt in den eingeschraenkten Setup-Flow geleitet und kommen erst danach in die eigentliche Admin-Oberflaeche.
+- Recovery bleibt shell-tauglich: `python -m app.cli admin-disable-mfa --username admin`.
+- Absichtliche Restluecke der gestuften Einfuehrung: `/auth/login` fuer Admin-Bearer-Tokens ist noch nicht MFA-geschuetzt.
+
+### Hardening / Sprint 7
+
+Mobile App Proof:
+
+- Backend-Endpunkte: `POST /auth/app-proof/challenge`, `POST /auth/app-proof/verify/android`, `POST /auth/app-proof/verify/ios`.
+- Enforced wird nur Login-/Session-Issuance fuer mobile Bearer-Tokens, noch nicht jeder einzelne API-Request mit frischem Provider-Proof.
+- Generische HTTP-Clients koennen in `enforce_login` ohne gueltigen mobilen Proof keine neuen User-Bearer-Sessions mehr holen.
+- Observability: `/admin/metrics` zaehlt u.a. `app_proof.challenge_issued`, `app_proof.verify_success`, `app_proof.verify_failed`, `app_proof.degraded_allow`, `app_proof.enforcement_blocked`.
+- Private-network-first bleibt unveraendert. App-Proof macht Public-Internet-Exposure nicht zu einem supporteten Betriebsmodell.
+- Weiterhin explizit deferred: all-request proof-of-possession, mTLS, DeviceCheck als Enforcement-Surrogat und ein grosses Revocation-UI.
 
 Metrics counters expected in `/admin/metrics`:
 
@@ -209,7 +300,8 @@ docker compose exec wol-backend python -m app.cli add-user alice supersecret --r
 docker compose exec wol-backend python -m app.cli add-host --name Proxmox --mac AA:BB:CC:DD:EE:FF --broadcast 192.168.178.255 --source-ip 192.168.178.2 --interface eth0
 ```
 
-Hinweis: Die CLI deckt aktuell nur Basis-User-/Host-Erstellung ab. Für wiederholbares Reseeding mit Power-Check-Feldern, Device Access und Scheduled Wakes ist die Admin-API bzw. die Admin UI der verlässliche Weg.
+Hinweis: Die CLI deckt aktuell Basis-User-/Host-Erstellung plus MFA-Break-Glass-Recovery ab. Für wiederholbares Reseeding mit Power-Check-Feldern, Device Access und Scheduled Wakes ist die Admin-API bzw. die Admin UI der verlässliche Weg.
+Break-Glass-Recovery: `python -m app.cli admin-disable-mfa --username <adminname>`.
 
 ## 3. API (MVP)
 
@@ -276,7 +368,9 @@ Sprint-1 Admin-App Additions:
 Hinweis:
 
 - Debug/Testing nutzt `usesCleartextTraffic=true`; Release-Builds setzen `usesCleartextTraffic=false`.
-- Als Backend URL z.B. `http://wol-server:8080` (MagicDNS) oder `http://100.x.y.z:8080`.
+- Fuer regulare App-Nutzung sollte die Backend-URL ein vertrauenswuerdiger HTTPS-Endpunkt sein, z.B. `https://wol-server.tailnet.ts.net:6500` oder `https://192.168.1.200:6500`.
+- Wenn direkt per IP verbunden wird, muss das Zertifikat diese IP als SAN enthalten und vom Geraet vertraut werden.
+- Plain HTTP auf privaten Netzen bleibt nur ein expliziter Betreiber-Override und ist nicht der empfohlene Standardpfad fuer Release-Clients.
 - Release signing in CI/local build über Umgebungsvariablen:
   - `WFF_RELEASE_STORE_FILE`
   - `WFF_RELEASE_STORE_PASSWORD`

@@ -6,6 +6,9 @@ from fastapi import Request
 
 from .config import Settings
 
+LOGIN_TLS_REQUIRED_DETAIL = "HTTPS is required for authentication from this network"
+AUTHENTICATED_TLS_REQUIRED_DETAIL = "HTTPS is required for authenticated requests from this network"
+
 
 def _parse_ip(value: str | None) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
     if not value:
@@ -14,6 +17,17 @@ def _parse_ip(value: str | None) -> ipaddress.IPv4Address | ipaddress.IPv6Addres
         return ipaddress.ip_address(value.strip())
     except ValueError:
         return None
+
+
+def parse_cidrs(cidrs: list[str]) -> tuple[list[str], list[str]]:
+    valid: list[str] = []
+    invalid: list[str] = []
+    for cidr in cidrs:
+        try:
+            valid.append(str(ipaddress.ip_network(cidr, strict=False)))
+        except ValueError:
+            invalid.append(cidr)
+    return valid, invalid
 
 
 def is_ip_in_networks(ip_text: str, cidrs: list[str]) -> bool:
@@ -85,3 +99,20 @@ def is_https_request(request: Request, settings: Settings) -> bool:
     if not _trusted_proxy_peer(request, settings):
         return False
     return _extract_forwarded_proto(request) == "https"
+
+
+def is_private_http_client_allowed(request: Request, settings: Settings) -> bool:
+    if not settings.allow_insecure_private_http:
+        return False
+    client_ip = get_request_ip(request, settings)
+    if not client_ip:
+        return False
+    return is_ip_in_networks(client_ip, settings.private_http_allowed_cidrs_list)
+
+
+def is_auth_transport_allowed(request: Request, settings: Settings) -> bool:
+    if is_https_request(request, settings):
+        return True
+    if not settings.require_tls_for_auth:
+        return True
+    return is_private_http_client_allowed(request, settings)

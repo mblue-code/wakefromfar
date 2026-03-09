@@ -44,6 +44,7 @@ class AdminActivityPollingWorker(
                 token = token,
                 limit = ACTIVITY_PAGE_SIZE,
                 typeFilter = "wake,poke",
+                installationId = prefs.getInstallationId(),
             )
             val previousEventId = prefs.getLastSeenAdminActivityEventId()
             val latestEventId = events.maxOfOrNull { it.id }

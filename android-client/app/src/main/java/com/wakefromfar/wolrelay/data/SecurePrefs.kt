@@ -5,6 +5,7 @@ import android.content.SharedPreferences
 import android.util.Log
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
+import java.util.UUID
 import java.security.KeyStore
 import javax.crypto.AEADBadTagException
 
@@ -25,6 +26,16 @@ class SecurePrefs(context: Context) {
 
     fun setBackendUrl(url: String) {
         prefs.edit().putString(KEY_BACKEND_URL, url).apply()
+    }
+
+    fun getInstallationId(): String {
+        val existing = prefs.getString(KEY_INSTALLATION_ID, null)?.trim().orEmpty()
+        if (existing.isNotEmpty()) {
+            return existing
+        }
+        val generated = UUID.randomUUID().toString().lowercase()
+        prefs.edit().putString(KEY_INSTALLATION_ID, generated).apply()
+        return generated
     }
 
     fun getLastSeenAdminActivityEventId(): Int = prefs.getInt(KEY_LAST_SEEN_ADMIN_ACTIVITY_EVENT_ID, 0)
@@ -127,11 +138,12 @@ class SecurePrefs(context: Context) {
         const val MASTER_KEY_ALIAS = "_androidx_security_master_key_"
         const val KEY_TOKEN = "token"
         const val KEY_BACKEND_URL = "backend_url"
+        const val KEY_INSTALLATION_ID = "installation_id"
         const val KEY_LAST_SEEN_ADMIN_ACTIVITY_EVENT_ID = "last_seen_admin_activity_event_id"
         const val KEY_LAST_NOTIFIED_SHUTDOWN_EVENT_ID = "last_notified_shutdown_event_id"
         const val KEY_ADMIN_BACKGROUND_ALERTS_ENABLED = "admin_background_alerts_enabled"
         const val KEY_THEME_MODE = "theme_mode"
         const val KEY_FIRST_RUN_ONBOARDING_ACK = "first_run_onboarding_ack"
-        const val DEFAULT_BACKEND_URL = "http://100.100.100.100:8080"
+        const val DEFAULT_BACKEND_URL = ""
     }
 }

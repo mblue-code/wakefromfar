@@ -36,6 +36,12 @@
 		A00000000000000000000019 /* Localizable.strings in Resources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000052 /* Localizable.strings */; };
 		A0000000000000000000009C /* DeviceContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000009A /* DeviceContractTests.swift */; };
 		A0000000000000000000009E /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000042 /* Models.swift */; };
+		A000000000000000000000A1 /* APIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000041 /* APIClient.swift */; };
+		A000000000000000000000A2 /* SessionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000043 /* SessionStore.swift */; };
+		A000000000000000000000A3 /* JWTClaimsDecoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000044 /* JWTClaimsDecoder.swift */; };
+		A000000000000000000000A4 /* AppPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000047 /* AppPreferences.swift */; };
+		A000000000000000000000A5 /* KeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000048 /* KeychainStore.swift */; };
+		A000000000000000000000A6 /* AppMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000024 /* AppMessage.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -391,8 +397,14 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A000000000000000000000A6 /* AppMessage.swift in Sources */,
+				A000000000000000000000A1 /* APIClient.swift in Sources */,
+				A000000000000000000000A4 /* AppPreferences.swift in Sources */,
 				A0000000000000000000009E /* Models.swift in Sources */,
+				A000000000000000000000A5 /* KeychainStore.swift in Sources */,
+				A000000000000000000000A3 /* JWTClaimsDecoder.swift in Sources */,
 				A0000000000000000000009C /* DeviceContractTests.swift in Sources */,
+				A000000000000000000000A2 /* SessionStore.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -473,6 +485,7 @@
 				CODE_SIGN_ENTITLEMENTS = WakeFromFar.entitlements;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "\"Resources\"";
+				ENABLE_TESTABILITY = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = WakeFromFar;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
