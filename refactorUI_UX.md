@@ -1,42 +1,64 @@
-# WakeFromFar Admin UI/UX Refactor Plan
+# WakeFromFar Admin UI/UX Refactor Plan (Revised)
+
+> Revised 2026-03-08 — updated to reflect scheduled wakes, device memberships, and disabled invites/pilot-metrics.
 
 ## Current State Analysis
 
 ### Architecture
-- **Single file**: `backend/app/admin_ui.py` (2,229 lines) — all HTML, CSS, JS, i18n, routes
+- **Single file**: `backend/app/admin_ui.py` (3,186 lines) — all HTML, CSS, JS, i18n, routes
 - **No frameworks**: Pure inline CSS + vanilla JS, server-rendered HTML via Python f-strings
 - **Theme support**: Light/dark via CSS custom properties + localStorage
-- **i18n**: EN/DE with ~200 keys
+- **i18n**: EN/DE with ~240+ keys
 - **Responsive**: Single breakpoint at 768px
+
+### Pages (13 active + 2 disabled)
+
+| Page | Route | Complexity | Notes |
+|------|-------|------------|-------|
+| Login | `/login` | Low | Standalone, own CSS |
+| Dashboard | `/` | Medium | 4 stat cards + 2 tables |
+| Users | `/users` | Medium | Create form + table w/ inline edit |
+| Devices | `/devices` | High | Create grid form + table w/ 9-input inline edit |
+| Scheduled Wakes | `/scheduled-wakes` | High | Filter form + jobs table + runs table + separate create/edit pages |
+| Device Access | `/device-memberships` | High | Grant form w/ 5 permission checkboxes + table w/ inline checkbox edit |
+| Wake Logs | `/wake-logs` | Low | Filter form + table |
+| Power Logs | `/power-check-logs` | Low | Filter form + table |
+| Audit Logs | `/audit-logs` | Low | Table only |
+| Diagnostics | `/diagnostics` | Medium | 3 info tables |
+| Discovery | `/discovery` | Very High | Scan form + 3 tables + bulk import + docker filter |
+| Metrics | `/metrics` | Low | Table only |
+| Invites | `/invites` | — | Disabled, redirects |
+| Pilot Metrics | `/pilot-metrics` | — | Disabled, redirects |
 
 ### Current Visual Issues
 
 | Area | Problem |
 |------|---------|
-| **Layout density** | Tables are crammed with inline forms (devices page has 12 columns + edit form per row) |
-| **Form placement** | Create forms sit above tables with no visual separation — looks like one continuous block |
-| **Inline editing** | Device update form = 9 stacked inputs inside a table cell — unusable on smaller screens |
-| **Inconsistent spacing** | Mix of inline `style=` attributes and CSS classes; `gap:4px`, `gap:6px`, `gap:8px` randomly |
-| **Visual hierarchy** | h2 headings at 1.1rem are barely distinguishable from body text |
-| **Stat cards** | Dashboard cards are plain white boxes — no icon, no trend, no color accent |
+| **Layout density** | Tables crammed with inline forms (devices: 12 cols + 9-input edit; memberships: 12 cols + checkbox grid) |
+| **Form placement** | Create forms sit above tables with no visual separation — one continuous block |
+| **Inline editing** | Device update = 9 stacked inputs in a table cell; membership update = 5 checkboxes + sort input inline |
+| **Inconsistent spacing** | Mix of inline `style=` and CSS classes; `gap:4px`, `gap:6px`, `gap:8px` randomly |
+| **Visual hierarchy** | h2 headings at 1.1rem barely distinguishable from body text |
+| **Stat cards** | 4 plain white boxes — no icon, no color accent (Users, Devices, Scheduled Wakes, Device Access) |
 | **Tables** | No hover states, no zebra striping, UUIDs shown in full (unreadable) |
-| **Buttons** | All buttons look identical — primary actions (Save/Create) vs destructive (Delete) not differentiated |
-| **Mobile** | Sidebar collapses to horizontal wrapping links — becomes chaotic with 10+ nav items |
-| **Login page** | Functional but minimal — no visual warmth, no branding beyond text |
-| **Discovery page** | Most complex page with 4 tables + forms — overwhelming wall of data |
-| **Flash messages** | Auto-dismiss at 4s is too fast for error messages; no distinction in urgency |
-| **Empty states** | No empty state messages when tables have zero rows |
-| **Topbar** | Cluttered with user info, lang switch, theme toggle, logout all in a row |
-| **Badge colors** | Hardcoded without semantic meaning — no legend, colors don't follow a system |
+| **Buttons** | Primary actions (Save/Create) vs destructive (Delete) vs toggle (Enable/Disable) not differentiated |
+| **Mobile** | Sidebar collapses to horizontal wrapping links — chaotic with 12+ nav items |
+| **Login page** | Functional but minimal — no branding beyond text |
+| **Discovery page** | Most complex page: 4 tables + forms — overwhelming wall of data |
+| **Scheduled wakes** | Create/edit are separate pages but look identical to main layout — no visual "form page" feel |
+| **Permission checkboxes** | Device memberships checkbox grid has no visual grouping or explanation |
+| **Flash messages** | Auto-dismiss at 4s too fast for errors; no urgency distinction |
+| **Empty states** | No message when tables have zero rows |
+| **Badge colors** | Hardcoded without semantic system — no legend |
 
 ---
 
 ## Design Principles
 
-1. **Zero new dependencies** — keep the self-contained single-file approach
-2. **Preserve all functionality** — every button, form, filter stays
+1. **Zero new dependencies** — keep self-contained single-file approach
+2. **Preserve all functionality** — every button, form, filter, permission checkbox stays
 3. **Reduce cognitive load** — progressive disclosure, group related actions
-4. **Consistent visual language** — unified spacing scale, color system, component patterns
+4. **Consistent visual language** — unified spacing, color system, component patterns
 5. **Mobile-usable** — admin tasks should work on tablet/phone in emergencies
 
 ---
@@ -46,9 +68,9 @@
 ### Light Theme
 
 ```
-Background:     #f8f9fc (slightly warmer than current #f5f7fb)
+Background:     #f8f9fc
 Surface:        #ffffff
-Surface-alt:    #f1f3f8 (for alternating rows, secondary panels)
+Surface-alt:    #f1f3f8 (alternating rows, secondary panels)
 Border:         #e2e5ed
 Border-subtle:  #eef0f5
 
@@ -56,7 +78,7 @@ Text-primary:   #1a1d26
 Text-secondary: #5a6178
 Text-muted:     #8b92a8
 
-Accent:         #4f6ef7 (blue — primary actions)
+Accent:         #4f6ef7 (primary actions)
 Accent-hover:   #3b5ae0
 Accent-subtle:  #eef1fe (accent backgrounds)
 
@@ -93,14 +115,14 @@ Danger:         #f05555
 Info:           #60a5fa
 ```
 
-### Semantic Badge Colors (both themes)
+### Semantic Badge Colors
 
 | Status | Color | Usage |
 |--------|-------|-------|
-| `sent` / `on` / `completed` | Success green | Positive outcomes |
-| `already_on` | Info blue | Informational |
-| `failed` / `error` | Danger red | Failures |
-| `off` / `unknown` | Muted gray | Neutral/unknown |
+| `sent` / `on` / `completed` / `enabled` | Success green | Positive outcomes |
+| `already_on` / `running` | Info blue | Informational |
+| `failed` / `error` / `disabled` | Danger red | Failures & disabled states |
+| `off` / `unknown` / `pending` | Muted gray | Neutral/unknown |
 | `tcp` / `icmp` | Distinct purples/teals | Method identifiers |
 | `admin` | Accent blue | Role highlight |
 | `user` | Muted | Default role |
@@ -111,8 +133,6 @@ Info:           #60a5fa
 ---
 
 ## Spacing Scale
-
-Replace ad-hoc pixel values with a consistent scale:
 
 ```
 --space-1: 0.25rem   (4px)
@@ -142,14 +162,13 @@ Replace ad-hoc pixel values with a consistent scale:
 
 ## Component Redesign
 
-### 1. Sidebar (low effort, high impact)
+### 1. Sidebar
 
 **Changes:**
-- Add subtle icons (CSS-only, using unicode/emoji or simple SVG inline) before each nav label
-- Add a visual group label above each nav section ("Management", "Logs", "System")
-- Slightly increase padding for better touch targets
-- Add a subtle bottom border/accent on active item instead of background-only highlight
-- Sidebar footer: version or "Admin Panel" label at bottom
+- Add section group labels ("MANAGEMENT", "SCHEDULING", "LOGS", "SYSTEM") as small uppercase muted text
+- Left accent bar (3px) on active nav item + background highlight
+- Slightly increase padding for touch targets
+- Sidebar footer with "Admin Panel" label
 
 ```
 ┌──────────────────────┐
@@ -159,7 +178,10 @@ Replace ad-hoc pixel values with a consistent scale:
 │ ▸ Dashboard          │  ← active: left accent bar + bg
 │   Users              │
 │   Devices            │
-│   Assignments        │
+│                      │
+│ SCHEDULING           │
+│   Scheduled Wakes    │
+│   Device Access      │
 │                      │
 │ LOGS                 │
 │   Wake Logs          │
@@ -171,16 +193,15 @@ Replace ad-hoc pixel values with a consistent scale:
 │   Discovery          │
 │   Metrics            │
 │                      │
-│              v1.0    │
+│         Admin Panel  │
 └──────────────────────┘
 ```
 
-### 2. Topbar (simplify)
+### 2. Topbar
 
 **Changes:**
-- Move language switch into a dropdown or smaller icon-based toggle
-- Group user info + logout into a single user menu area
-- Keep theme toggle as icon button
+- Compact lang switch
+- Clean spacing between user info, theme toggle, logout
 
 ```
 ┌─────────────────────────────────────────────────────────┐
@@ -188,47 +209,43 @@ Replace ad-hoc pixel values with a consistent scale:
 └─────────────────────────────────────────────────────────┘
 ```
 
-### 3. Dashboard Stat Cards (high impact)
+### 3. Dashboard Stat Cards
+
+**Current:** 4 cards — Users, Devices, Scheduled Wakes, Device Access
 
 **Changes:**
-- Add color accent (left border or top border with semantic color)
-- Add subtle background tint per card
-- Add a small icon per stat (unicode)
-- Larger number, smaller label below
+- Colored left border accent per card
+- Subtle icon per stat (unicode)
+- Larger number, smaller label
 
 ```
-┌─────────────┐  ┌─────────────┐  ┌─────────────┐
-│ 👥           │  │ 💻           │  │ 🔗           │
-│     12       │  │     8        │  │     24       │
-│   Users      │  │  Devices     │  │ Assignments  │
-└─────────────┘  └─────────────┘  └─────────────┘
-  blue accent      green accent     purple accent
+┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐
+│ 👥           │  │ 💻           │  │ ⏰           │  │ 🔑           │
+│     12       │  │     8        │  │     5        │  │     24       │
+│   Users      │  │  Devices     │  │  Schedules   │  │ Device Access│
+└─────────────┘  └─────────────┘  └─────────────┘  └─────────────┘
+  blue accent      green accent     amber accent     purple accent
 ```
 
-### 4. Tables (high impact)
+### 4. Tables
 
 **Changes:**
-- Add zebra striping (alternate row background)
-- Add row hover highlight
-- Truncate UUIDs to first 8 chars with `title` attribute for full value
-- Wrap tables in `<article>` for consistent card styling with subtle shadow
-- Add empty state row: "No records found" centered, muted
+- Zebra striping (alternate row background)
+- Row hover highlight
+- Truncate UUIDs/IDs to first 8 chars with `title` for full value
+- Wrap tables in `<article>` for card styling
+- Empty state row: "No records found" centered, muted
 
 ```css
 tbody tr:nth-child(even) { background: var(--surface-alt); }
 tbody tr:hover { background: var(--accent-subtle); }
 ```
 
-### 5. Forms — Create/Edit Separation (high impact)
+### 5. Forms — Create/Edit Separation
 
-**Current:** Create form directly above table, inline edit forms inside table cells.
+**Create forms:** Wrap in `<article>` card with heading, clear visual boundary.
 
-**New approach:**
-- **Create forms**: Wrap in `<article>` card with a heading, clear visual boundary
-- **Inline edit (devices)**: Replace 9-input stacked form in table cell with a single "Edit" button that opens an expanded row or modal-like inline panel below the row
-- **Simple inline edit (users)**: Keep role dropdown + password inline but style as a compact row with visual grouping
-
-#### Device Edit Pattern (expanded row):
+**Device inline edit:** Replace 9-input stacked form in table cell with "Edit" button → expanded row below.
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
@@ -243,82 +260,86 @@ tbody tr:hover { background: var(--accent-subtle); }
 │ │  Check: [tcp ▾] Target [192.168.1.5]  Port [22       ]  │ │
 │ │                                          [Cancel] [Save] │ │
 │ └──────────────────────────────────────────────────────────┘ │
-├──────────────────────────────────────────────────────────────┤
-│ b7e │ server  │ ...              │ ...   │ ...    │ ...      │
 └──────────────────────────────────────────────────────────────┘
 ```
 
-### 6. Buttons (medium impact)
+**Device memberships inline edit:** Keep checkbox grid inline but add visual grouping — wrap checkboxes in a `.permission-group` with subtle background and border-radius.
 
-**Button hierarchy:**
+**User inline edit:** Keep compact role dropdown + password inline.
+
+### 6. Buttons
 
 | Type | Style | Usage |
 |------|-------|-------|
-| Primary | Solid accent bg, white text | Create, Save, Login, Run |
-| Secondary | Border only, text color | Cancel, Test, Filter |
-| Danger | Red border, red text; solid red on hover | Delete |
-| Ghost | No border, text only | Dismiss, close |
+| Primary | Solid accent bg, white text | Create, Save, Login, Run, Grant Access |
+| Secondary | Border only, text color | Cancel, Test, Filter, Merge |
+| Danger | Red border, red text; solid red on hover | Delete, Remove Access |
+| Toggle | Green outline when enabled, muted when disabled | Enable/Disable schedule |
 | Small | Reduced padding, smaller font | Inline table actions |
 
 ```css
-.btn         { padding: .45rem .85rem; border-radius: 8px; font-weight: 500; }
 .btn-primary { background: var(--accent); color: #fff; border: none; }
 .btn-danger  { background: transparent; color: var(--danger); border: 1px solid var(--danger); }
 .btn-danger:hover { background: var(--danger); color: #fff; }
-.btn-sm      { padding: .3rem .6rem; font-size: var(--text-xs); }
+.btn-toggle-on  { color: var(--success); border-color: var(--success); }
+.btn-toggle-off { color: var(--muted); border-color: var(--border); }
+.btn-sm { padding: .3rem .6rem; font-size: var(--text-xs); }
 ```
 
-### 7. Flash Messages (low effort)
+### 7. Flash Messages
 
-**Changes:**
 - Error messages: don't auto-dismiss (require manual close)
-- Success messages: auto-dismiss after 5s (increased from 4s)
-- Add left border accent (green for success, red for error)
-- Add icon prefix (✓ for success, ✕ for error)
+- Success messages: auto-dismiss after 5s
+- Left border accent (4px solid green/red)
+- Icon prefix (✓ success, ✕ error)
 
-### 8. Login Page (medium impact)
+### 8. Login Page
 
-**Changes:**
-- Add subtle gradient or pattern to background
-- Increase card max-width slightly (400px)
-- Add favicon/logo above title
-- Add subtle box-shadow to card
-- Improve input focus states (accent border + subtle glow)
+- Subtle box-shadow on card
+- Increase max-width to 400px
+- Focus states with accent border + subtle glow
+- Add favicon image above title
 
-```css
-input:focus {
-  outline: none;
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-subtle);
-}
-```
+### 9. Mobile Responsive
 
-### 9. Mobile Responsive (medium effort)
-
-**Changes:**
-- Sidebar: hamburger toggle (hidden by default on mobile) instead of horizontal wrapping
+- Sidebar: hamburger toggle (hidden by default on mobile)
 - Tables: horizontal scroll with sticky first column
-- Stat cards: stack to 1 column on very small screens (< 480px)
+- Stat cards: 2-col at 768px, 1-col at 480px
 - Forms: stack all inputs vertically on mobile
-- Add a second breakpoint at 480px
+- Permission checkbox grids: 1-col on mobile (already partially done via `.membership-permissions`)
+- Add breakpoint at 480px
 
-```
-@media (max-width: 768px) {
-  .sidebar { display: none; }  /* toggle via JS hamburger */
-  .sidebar.open { display: flex; position: fixed; z-index: 50; }
-}
-@media (max-width: 480px) {
-  .stat-cards { grid-template-columns: 1fr; }
-}
-```
+### 10. Discovery Page
 
-### 10. Discovery Page (high effort, specific)
+- Collapsible sections via `<details>` for Runs, Candidates, Events
+- Sender bindings as pill tags
+- Scan form in `<fieldset>` with `<legend>`
 
-**Changes:**
-- Collapsible sections: each table group (Runs, Candidates, Events) in its own `<details>` element
-- Candidates table: reduce columns, move secondary data to expandable row
-- Sender bindings: show as pill tags instead of comma-separated text
-- Scan form: use fieldset with legend for visual grouping
+### 11. Scheduled Wakes Pages (NEW)
+
+**List page:**
+- Filter form wrapped in `<article>` with subtle styling
+- Jobs table: use toggle button styling for enable/disable
+- Runs table below, collapsible via `<details>`
+- Day-of-week display as small pill tags (Mon, Tue, etc.)
+
+**Create/Edit pages:**
+- Form wrapped in `<article>` card with clear heading
+- Day-of-week checkboxes: styled as selectable pill buttons rather than raw checkboxes
+- Timezone input: add helper text
+- Back/cancel link clearly visible
+
+### 12. Device Access Page (NEW)
+
+**Grant form:**
+- Wrap in `<article>` card
+- Permission checkboxes: group visually with label descriptions
+- Use `.permission-group` with subtle background, rounded corners
+
+**Table:**
+- Boolean permission columns: show as colored check/cross icons instead of raw checkbox inputs
+- Inline edit: permission checkboxes get `.permission-group` styling
+- Sort order: small numeric input
 
 ---
 
@@ -327,69 +348,95 @@ input:focus {
 ### Phase 1: Foundation (CSS variables + spacing + typography)
 **Effort: Low | Impact: Medium**
 
-1. Replace all color values with new CSS custom properties
-2. Add spacing scale variables and apply consistently
-3. Update typography scale
-4. Add `input:focus` styles globally
-5. Remove all inline `style=` attributes, move to CSS classes
+1. Replace all color values in CSS (`:root` and `[data-theme="dark"]`) with new palette
+2. Add spacing scale variables and apply consistently across all padding/margin/gap values
+3. Add typography scale variables and reference in font-size declarations
+4. Add global `input:focus` and `select:focus` styles
+5. Replace inline `style=` attributes with CSS classes (`.form-inline`, `.form-grid`, `.form-grid-4`, `.form-grid-2`)
+6. Incorporate existing classes (`.membership-create-form`, `.membership-permissions`, `.checkbox-group`, `.checkbox-item`, `.stacked-cell`) into the new spacing/color system
 
-**Files changed:** `admin_ui.py` (CSS section + HTML templates)
+**Scope:** CSS section in `_layout()` + login page CSS + all inline styles across 13 pages
 
 ### Phase 2: Components (buttons, badges, flash, tables)
 **Effort: Medium | Impact: High**
 
-1. Implement button hierarchy (`.btn-primary`, `.btn-danger`, `.btn-sm`)
-2. Update badge color system with semantic mapping
-3. Improve flash messages (icons, timing, left accent)
-4. Add table zebra striping, hover, truncated UUIDs
-5. Add empty state rows for all tables
-6. Wrap tables in `<article>` cards
+1. Button hierarchy: `.btn-primary`, `.btn-secondary`, `.btn-danger`, `.btn-toggle-on`, `.btn-toggle-off`, `.btn-sm`
+2. Badge color system: update `_badge()` with semantic mapping including new states (`enabled`, `disabled`, `running`, `pending`)
+3. Flash messages: icons, timing (5s success / no auto-dismiss error), left accent border
+4. Table zebra striping + hover for all tables
+5. UUID truncation: `_short_id()` helper, apply across all pages
+6. Empty state rows for all tables (add i18n key `empty_state` / `empty_state` DE)
+7. Wrap all `<figure><table>` in `<article>` cards
 
-**Files changed:** `admin_ui.py` (CSS + all page body templates)
+**Scope:** CSS + `_badge()` function + all page templates (13 pages)
 
-### Phase 3: Layout (sidebar, topbar, cards)
+### Phase 3: Layout (sidebar, topbar, stat cards, form cards)
 **Effort: Medium | Impact: High**
 
-1. Sidebar: add section labels, active indicator accent bar, footer
-2. Topbar: simplify layout, compact lang/user area
-3. Dashboard stat cards: colored accents, icons
-4. Wrap create forms in `<article>` cards with headings
+1. Sidebar: section labels (MANAGEMENT / SCHEDULING / LOGS / SYSTEM), active accent bar, footer
+2. Topbar: compact layout
+3. Dashboard stat cards: 4 cards with colored accent + icons
+4. Wrap all create/filter forms in `<article>` cards
+5. Permission checkbox visual grouping (`.permission-group`)
 
-**Files changed:** `admin_ui.py` (`_layout` function + dashboard + forms)
+**Scope:** `_layout()` sidebar/topbar + dashboard + all form wrappers + memberships page
 
-### Phase 4: Forms & Interactions (inline edit, mobile)
+### Phase 4: Forms & Interactions
 **Effort: High | Impact: High**
 
-1. Device table: replace inline stacked form with expand/collapse edit row (JS toggle)
+1. Device table: expand/collapse edit row via JS toggle (replace inline 9-input stack)
 2. User table: compact inline form styling
-3. Discovery page: `<details>` collapsible sections
-4. Mobile: hamburger toggle for sidebar
-5. Mobile: add 480px breakpoint
+3. Scheduled wakes: day-of-week pill styling, toggle button for enable/disable
+4. Discovery page: `<details>` collapsible sections, fieldset for scan form
+5. Device memberships: boolean columns as check/cross icons in table view
 
-**Files changed:** `admin_ui.py` (JS section + devices/discovery pages + CSS)
+**Scope:** Devices page + users page + scheduled-wakes pages + discovery page + memberships page + JS section
 
-### Phase 5: Polish
-**Effort: Low | Impact: Medium**
+### Phase 5: Mobile & Polish
+**Effort: Medium | Impact: Medium**
 
-1. Login page: shadow, focus glow, gradient background
-2. Add subtle transitions/animations (expand/collapse, hover)
-3. Add `title` attributes for truncated data
-4. Review and adjust dark theme for all changes
-5. Test all pages in both themes at all breakpoints
+1. Hamburger toggle for sidebar on mobile
+2. 480px breakpoint for stat cards + forms
+3. Login page: shadow, focus glow
+4. Transitions/animations (expand/collapse, hover)
+5. `title` attributes for truncated data
+6. Dark theme audit for all new variables and components
+7. Test all 13 pages in both themes at 3 breakpoints (desktop, 768px, 480px)
 
-**Files changed:** `admin_ui.py` (login page + CSS tweaks)
+**Scope:** CSS responsive rules + JS hamburger + login page + dark theme pass
+
+---
+
+## New i18n Keys Needed
+
+```yaml
+# English
+empty_state: "No records found"
+nav_section_management: "MANAGEMENT"
+nav_section_scheduling: "SCHEDULING"
+nav_section_logs: "LOGS"
+nav_section_system: "SYSTEM"
+
+# German
+empty_state: "Keine Einträge gefunden"
+nav_section_management: "VERWALTUNG"
+nav_section_scheduling: "PLANUNG"
+nav_section_logs: "PROTOKOLLE"
+nav_section_system: "SYSTEM"
+```
 
 ---
 
 ## What NOT to Change
 
-- No external CSS/JS libraries (keep zero-dependency)
+- No external CSS/JS libraries
 - No template engine (keep f-string rendering)
 - No new routes or API changes
-- No i18n key changes (unless adding empty state texts)
 - No changes to form field names or POST behavior
 - No changes to authentication/session logic
-- No file splitting (keep single-file approach for now)
+- No file splitting (keep single-file approach)
+- No changes to the permission model or scheduled wake logic
+- Existing i18n keys stay unchanged — only add new ones
 
 ---
 
@@ -397,10 +444,10 @@ input:focus {
 
 | Phase | Changes | Effort | Impact |
 |-------|---------|--------|--------|
-| 1. Foundation | Colors, spacing, typography, focus states | Low | Medium |
-| 2. Components | Buttons, badges, tables, flash, empty states | Medium | High |
-| 3. Layout | Sidebar, topbar, stat cards, form cards | Medium | High |
-| 4. Forms | Inline edit, discovery sections, mobile | High | High |
-| 5. Polish | Login, transitions, dark theme audit | Low | Medium |
+| 1. Foundation | Colors, spacing, typography, focus states, inline→class | Low | Medium |
+| 2. Components | Buttons, badges, tables, flash, empty states, UUID truncation | Medium | High |
+| 3. Layout | Sidebar sections, topbar, stat cards, form cards, permission groups | Medium | High |
+| 4. Forms | Device expand/edit, schedule pills, discovery collapsible, toggle buttons | High | High |
+| 5. Mobile & Polish | Hamburger, 480px breakpoint, login, transitions, dark theme audit | Medium | Medium |
 
-Total: ~5 phases, all within `admin_ui.py`, zero new dependencies.
+Total: 5 phases, all within `admin_ui.py`, zero new dependencies, covers all 13 active pages.

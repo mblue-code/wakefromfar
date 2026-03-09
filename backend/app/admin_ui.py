@@ -257,6 +257,8 @@ _I18N = {
         "action_create_invite": "Create Invite",
         "action_revoke": "Revoke",
         "action_filter": "Filter",
+        "action_cancel": "Cancel",
+        "heading_discovery_events": "Events",
         "action_run_discovery": "Run Discovery",
         "action_validate_wake": "Validate Wake",
         "action_import_candidate": "Import",
@@ -541,6 +543,8 @@ _I18N = {
         "action_create_invite": "Einladung erstellen",
         "action_revoke": "Widerrufen",
         "action_filter": "Filtern",
+        "action_cancel": "Abbrechen",
+        "heading_discovery_events": "Ereignisse",
         "action_run_discovery": "Discovery starten",
         "action_validate_wake": "Wake validieren",
         "action_import_candidate": "Importieren",
@@ -741,6 +745,10 @@ def _checkbox_checked(value: object) -> str:
 
 def _bool_text(request: Request, value: object) -> str:
     return _tr(request, "value_yes") if bool(value) else _tr(request, "value_no")
+
+
+def _bool_icon(val: object) -> str:
+    return '<span style="color:var(--success)">&#10003;</span>' if val else '<span style="color:var(--muted)">&mdash;</span>'
 
 
 def _form_checkbox(value: str) -> bool:
@@ -1065,12 +1073,12 @@ a{color:var(--link)}
 h1,h2,h3{margin:0 0 .8rem}
 h2{font-size:var(--text-lg);margin:0 0 var(--space-3)}
 p{margin:.35rem 0 .75rem}
-article{background:var(--card-bg);border:1px solid var(--card-border);border-radius:10px;padding:1rem;margin:0 0 1rem}
+article{background:var(--card-bg);border:1px solid var(--card-border);border-radius:10px;padding:1rem;margin:0 0 1rem;transition:border-color .2s,box-shadow .2s}
 button,input,select{font:inherit}
-input,select{width:100%;max-width:100%;padding:.45rem .6rem;border:1px solid var(--input-border);border-radius:8px;background:var(--input-bg);color:var(--input-fg)}
+input,select{width:100%;max-width:100%;padding:.45rem .6rem;border:1px solid var(--input-border);border-radius:8px;background:var(--input-bg);color:var(--input-fg);transition:border-color .2s,box-shadow .2s}
 input[type="checkbox"]{width:auto}
-button{padding:.45rem .85rem;border:1px solid var(--btn-border);border-radius:8px;background:var(--btn-bg);color:#fff;cursor:pointer}
-button:hover{filter:brightness(.95)}
+button{padding:.45rem .85rem;border:1px solid var(--btn-border);border-radius:8px;background:var(--btn-bg);color:#fff;cursor:pointer;transition:background .15s,border-color .15s,filter .15s,color .15s}
+button:hover{filter:brightness(.9)}
 input:focus,select:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-subtle)}
 button.secondary{background:var(--btn2-bg);color:var(--btn2-fg);border-color:var(--btn2-border)}
 .btn-primary{background:var(--accent);color:#fff;border:1px solid var(--accent)}
@@ -1110,6 +1118,8 @@ main.container-fluid{padding:1.5rem;flex:1}
 .flash{display:flex;align-items:center;justify-content:space-between;padding:var(--space-3) var(--space-4);border-radius:8px;margin-bottom:var(--space-4);font-size:var(--text-base)}
 .flash-ok{background:var(--success-bg);color:#1a5e2e;border:1px solid var(--success);border-left:4px solid var(--success)}
 .flash-err{background:var(--danger-bg);color:#7b1a1a;border:1px solid var(--danger);border-left:4px solid var(--danger)}
+[data-theme="dark"] .flash-ok{color:#a3e4b8}
+[data-theme="dark"] .flash-err{color:#f5a5a5}
 .flash-close{background:none;border:none;font-size:1.2rem;cursor:pointer;color:inherit;padding:0 .25rem;line-height:1}
 .stat-cards{display:grid;grid-template-columns:repeat(4,1fr);gap:1rem;margin-bottom:1.5rem}
 .stat-card{text-align:center;padding:var(--space-5);position:relative}
@@ -1135,16 +1145,42 @@ figure{overflow-x:auto;margin:0 0 1rem}
 .membership-permissions{display:grid;grid-template-columns:repeat(2,minmax(150px,1fr));gap:.35rem .75rem}
 .stacked-cell{display:grid;gap:.2rem}
 .muted{color:var(--muted);font-size:.85em}
+.hamburger{display:none;background:none;border:none;color:var(--fg);font-size:1.3rem;cursor:pointer;padding:.2rem .5rem;line-height:1}
+.hamburger:hover{background:var(--input-bg);border-radius:6px}
 @media(max-width:768px){
   .admin-shell{grid-template-columns:1fr}
-  .sidebar{position:static;height:auto}
-  .sidebar nav{flex-direction:row;flex-wrap:wrap;padding:.25rem}
-  .sidebar nav a{padding:.35rem .6rem;font-size:.8rem}
+  .sidebar{display:none;position:fixed;top:0;left:0;width:260px;height:100vh;z-index:50;box-shadow:4px 0 20px rgba(0,0,0,.25)}
+  .sidebar.open{display:flex}
+  .sidebar-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:40}
+  .sidebar-overlay.open{display:block}
+  .hamburger{display:block}
   .stat-cards{grid-template-columns:repeat(2,1fr)}
   .membership-create-form,.membership-permissions{grid-template-columns:1fr}
-}"""
+  .form-grid-3,.form-grid-4{grid-template-columns:1fr}
+  table{font-size:.8rem}
+  .form-inline{flex-direction:column}
+  .form-inline>input,.form-inline>select{width:100%}
+}
+@media(max-width:480px){
+  .stat-cards{grid-template-columns:1fr}
+  .form-grid-2{grid-template-columns:1fr}
+}
+.edit-row td{background:var(--thead-bg);padding:var(--space-4)}
+.form-grid-3{grid-template-columns:repeat(3,1fr)}
+.btn-toggle-on{background:transparent;color:var(--success);border:1px solid var(--success);padding:.3rem .6rem;font-size:var(--text-xs);border-radius:8px}
+.btn-toggle-on:hover{background:var(--success);color:#fff}
+.btn-toggle-off{background:transparent;color:var(--muted);border:1px solid var(--muted);padding:.3rem .6rem;font-size:var(--text-xs);border-radius:8px}
+.btn-toggle-off:hover{background:var(--muted);color:#fff}
+details{margin-bottom:var(--space-4)}
+details>summary{cursor:pointer;list-style:none;display:flex;align-items:center;gap:var(--space-2)}
+details>summary::-webkit-details-marker{display:none}
+details>summary::before{content:'▶';font-size:.7rem;transition:transform .2s}
+details[open]>summary::before{transform:rotate(90deg)}
+details>summary h2{margin:0}"""
 
-    js = """document.querySelectorAll('form[data-confirm]').forEach(function(f){
+    js = """function toggleSidebar(){var s=document.querySelector('.sidebar'),o=document.getElementById('sidebar-overlay');s.classList.toggle('open');o.classList.toggle('open');}
+function toggleEdit(id){var row=document.getElementById('edit-'+id);if(row)row.style.display=row.style.display==='none'?'table-row':'none';}
+document.querySelectorAll('form[data-confirm]').forEach(function(f){
   f.addEventListener('submit',function(e){if(!confirm(f.dataset.confirm))e.preventDefault()});
 });
 document.querySelectorAll('.flash').forEach(function(el){
@@ -1185,7 +1221,9 @@ document.querySelectorAll('.flash-ok').forEach(function(el){
   <div class="admin-shell">
     {sidebar}
     <div class="main-area">
+      <div class="sidebar-overlay" id="sidebar-overlay" onclick="toggleSidebar()"></div>
       <header class="topbar">
+        <button class="hamburger" id="hamburger" onclick="toggleSidebar()" aria-label="Menu">&#9776;</button>
         <span class="topbar-title">{_esc(title)}</span>
         <div class="topbar-right">
           <span class="topbar-user">{t("signed_in_as")} <strong>{_esc(admin_username)}</strong></span>
@@ -1435,16 +1473,17 @@ def login_page(request: Request, next: str = "/admin/ui", error: str | None = No
 *{{box-sizing:border-box}}
 html,body{{margin:0;padding:0}}
 body{{display:flex;align-items:center;justify-content:center;min-height:100vh;padding:1rem;font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--fg)}}
-.login-card{{width:100%;max-width:380px}}
-.login-card{{background:var(--card-bg);border:1px solid var(--card-border);border-radius:12px;padding:1rem}}
+.login-card{{width:100%;max-width:400px}}
+.login-card{{background:var(--card-bg);border:1px solid var(--card-border);border-radius:12px;padding:1.5rem;box-shadow:0 4px 24px rgba(0,0,0,.08)}}
 .login-brand{{text-align:center;margin-bottom:1.5rem}}
+.login-brand img{{width:48px;height:48px;margin-bottom:.5rem}}
 .login-brand h1{{font-size:1.5rem;margin:0}}
 .login-brand p{{color:var(--muted);font-size:.875rem;margin:.25rem 0 0}}
-.login-error{{color:#7b1a1a;background:#fef0f0;border:1px solid #e53535;border-left:4px solid #e53535;border-radius:8px;padding:.6rem .9rem;font-size:.875rem}}
-label{{display:block;margin:.45rem 0 .2rem}}
-input{{width:100%;max-width:100%;padding:.5rem .6rem;border:1px solid var(--input-border);border-radius:8px;background:var(--input-bg);color:var(--input-fg);font:inherit}}
-button{{margin-top:.65rem;width:100%;padding:.5rem .85rem;border:1px solid var(--btn-border);border-radius:8px;background:var(--btn-bg);color:#fff;cursor:pointer;font:inherit}}
-button:hover{{filter:brightness(.95)}}
+.login-error{{color:#7b1a1a;background:#fef0f0;border:1px solid #e53535;border-left:4px solid #e53535;border-radius:8px;padding:.6rem .9rem;font-size:.875rem;margin-bottom:.75rem}}
+label{{display:block;margin:.45rem 0 .2rem;font-size:.875rem;color:var(--muted)}}
+input{{width:100%;max-width:100%;padding:.5rem .6rem;border:1px solid var(--input-border);border-radius:8px;background:var(--input-bg);color:var(--input-fg);font:inherit;transition:border-color .2s,box-shadow .2s}}
+button{{margin-top:.65rem;width:100%;padding:.5rem .85rem;border:1px solid var(--btn-border);border-radius:8px;background:var(--btn-bg);color:#fff;cursor:pointer;font:inherit;transition:filter .15s}}
+button:hover{{filter:brightness(.9)}}
 input:focus{{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-subtle)}}
 .lang-footer{{text-align:center;margin-top:1rem;font-size:.8rem;color:var(--muted)}}
 .lang-footer a{{color:inherit}}
@@ -1453,6 +1492,7 @@ input:focus{{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--
 <body>
   <article class="login-card">
     <div class="login-brand">
+      <img src="/admin/ui/favicon.png" alt="" width="48" height="48" />
       <h1>WakeFromFar</h1>
       <p>{t("title_admin_login")}</p>
     </div>
@@ -1603,7 +1643,7 @@ def users_page(request: Request):
           </td>
           <td>
             <form method="post" action="/admin/ui/users/{row['id']}/delete" data-confirm="{_esc(t('confirm_delete_user', username=str(row['username'])))}">
-              <button type="submit" class="btn-danger">{t("action_delete")}</button>
+              <button type="submit" class="btn-danger btn-sm">{t("action_delete")}</button>
             </form>
           </td>
         </tr>
@@ -1731,25 +1771,30 @@ def devices_page(request: Request):
             </div>
           </td>
           <td>
-            <form method="post" action="/admin/ui/devices/{_esc(row['id'])}/update" style="display:grid;gap:4px;">
-              <input name="name" value="{_esc(row['name'])}" />
-              <input name="display_name" value="{_esc(row['display_name'])}" placeholder="{t("placeholder_display_name")}" />
-              <input name="mac" value="{_esc(row['mac'])}" />
-              <input name="interface" value="{_esc(row['interface'])}" placeholder="{t("placeholder_interface")}" />
-              <input name="source_ip" value="{_esc(row['source_ip'])}" placeholder="source ip (optional)" />
-              <input name="source_network_cidr" value="{_esc(row['source_network_cidr'])}" placeholder="{t("placeholder_subnet_cidr")}" />
-              <input name="check_target" value="{_esc(row['check_target'])}" placeholder="{t("placeholder_check_target")}" />
-              <input name="check_port" value="{_esc(row['check_port'])}" placeholder="{t("placeholder_check_port")}" />
-              <select name="check_method">
-                <option value="tcp" {"selected" if row['check_method']=="tcp" else ""}>tcp</option>
-                <option value="icmp" {"selected" if row['check_method']=="icmp" else ""}>icmp</option>
-              </select>
-              <button type="submit">{t("action_save")}</button>
-            </form>
+            <div style="display:flex;gap:4px;flex-wrap:wrap">
+              <button type="button" class="secondary btn-sm" onclick="toggleEdit('{_esc(row['id'])}')">{t("action_edit")}</button>
+              <form method="post" action="/admin/ui/devices/{_esc(row['id'])}/test-power-check" style="display:inline"><button type="submit" class="secondary btn-sm">{t("action_test_power_check")}</button></form>
+              <form method="post" action="/admin/ui/devices/{_esc(row['id'])}/delete" data-confirm="{_esc(t('confirm_delete_device', device=str(row['name'])))}" style="display:inline"><button type="submit" class="btn-danger btn-sm">{t("action_delete")}</button></form>
+            </div>
           </td>
-          <td>
-            <form method="post" action="/admin/ui/devices/{_esc(row['id'])}/test-power-check"><button type="submit" class="secondary">{t("action_test_power_check")}</button></form>
-            <form method="post" action="/admin/ui/devices/{_esc(row['id'])}/delete" data-confirm="{_esc(t('confirm_delete_device', device=str(row['name'])))}"><button type="submit" class="btn-danger">{t("action_delete")}</button></form>
+        </tr>
+        <tr class="edit-row" id="edit-{_esc(row['id'])}" style="display:none">
+          <td colspan="12">
+            <form method="post" action="/admin/ui/devices/{_esc(row['id'])}/update" class="form-grid form-grid-3">
+              <label>{t("col_name")}<input name="name" value="{_esc(row['name'])}" /></label>
+              <label>{t("col_display")}<input name="display_name" value="{_esc(row['display_name'])}" placeholder="{t("placeholder_display_name")}" /></label>
+              <label>{t("col_mac")}<input name="mac" value="{_esc(row['mac'])}" /></label>
+              <label>{t("col_interface")}<input name="interface" value="{_esc(row['interface'])}" placeholder="{t("placeholder_interface")}" /></label>
+              <label>Source IP<input name="source_ip" value="{_esc(row['source_ip'])}" placeholder="source ip (optional)" /></label>
+              <label>{t("placeholder_subnet_cidr")}<input name="source_network_cidr" value="{_esc(row['source_network_cidr'])}" placeholder="{t("placeholder_subnet_cidr")}" /></label>
+              <label>{t("col_method")}<select name="check_method"><option value="tcp" {"selected" if row['check_method']=="tcp" else ""}>tcp</option><option value="icmp" {"selected" if row['check_method']=="icmp" else ""}>icmp</option></select></label>
+              <label>{t("col_target")}<input name="check_target" value="{_esc(row['check_target'])}" placeholder="{t("placeholder_check_target")}" /></label>
+              <label>{t("col_port")}<input name="check_port" value="{_esc(row['check_port'])}" placeholder="{t("placeholder_check_port")}" /></label>
+              <div style="grid-column:1/-1;display:flex;gap:var(--space-2);justify-content:flex-end">
+                <button type="button" class="secondary btn-sm" onclick="toggleEdit('{_esc(row['id'])}')">{t("action_cancel")}</button>
+                <button type="submit">{t("action_save")}</button>
+              </div>
+            </form>
           </td>
         </tr>
         """
@@ -1777,8 +1822,8 @@ def devices_page(request: Request):
     </article>
     <h2>{t("heading_devices")}</h2>
     <article><table>
-      <thead><tr><th>{t("col_id")}</th><th>{t("col_name")}</th><th>{t("col_display")}</th><th>{t("col_mac")}</th><th>{t("col_method")}</th><th>{t("col_target")}</th><th>{t("col_port")}</th><th>{t("col_state")}</th><th>{t("col_checked_at")}</th><th>{t("col_diagnostics")}</th><th>{t("col_schedules")}</th><th>{t("col_update")}</th><th>{t("col_actions")}</th></tr></thead>
-      <tbody>{table_rows or _empty_row(request, 13)}</tbody>
+      <thead><tr><th>{t("col_id")}</th><th>{t("col_name")}</th><th>{t("col_display")}</th><th>{t("col_mac")}</th><th>{t("col_method")}</th><th>{t("col_target")}</th><th>{t("col_port")}</th><th>{t("col_state")}</th><th>{t("col_checked_at")}</th><th>{t("col_diagnostics")}</th><th>{t("col_schedules")}</th><th>{t("col_actions")}</th></tr></thead>
+      <tbody>{table_rows or _empty_row(request, 12)}</tbody>
     </table></article>
     """
     return _layout(request, t("title_devices"), body, admin["username"], message=message, error=error)
@@ -1998,7 +2043,7 @@ def scheduled_wakes_page(
               <a href="{_esc(_with_lang(f"/admin/ui/scheduled-wakes/{row['id']}/edit", _lang(request)))}">{t("action_edit")}</a>
               <form method="post" action="/admin/ui/scheduled-wakes/{_esc(row['id'])}/toggle">
                 <input type="hidden" name="return_to" value="{_esc(_schedule_filter_path(request, device_id=selected_device_id or None, enabled=enabled_filter))}" />
-                <button type="submit" class="secondary">{t("action_disable") if row['enabled'] else t("action_enable")}</button>
+                <button type="submit" class="{"btn-toggle-on" if row["enabled"] else "btn-toggle-off"}">{t("action_disable") if row['enabled'] else t("action_enable")}</button>
               </form>
               <form method="post" action="/admin/ui/scheduled-wakes/{_esc(row['id'])}/delete" data-confirm="{_esc(t('confirm_delete_schedule', label=str(row['label'])))}">
                 <input type="hidden" name="return_to" value="{_esc(_schedule_filter_path(request, device_id=selected_device_id or None, enabled=enabled_filter))}" />
@@ -2351,11 +2396,11 @@ def device_memberships_page(request: Request):
               <span class="muted">{_esc(row['device_id'])}</span>
             </div>
           </td>
-          <td>{_bool_text(request, row['can_view_status'])}</td>
-          <td>{_bool_text(request, row['can_wake'])}</td>
-          <td>{_bool_text(request, row['can_request_shutdown'])}</td>
-          <td>{_bool_text(request, row['can_manage_schedule'])}</td>
-          <td>{_bool_text(request, row['is_favorite'])}</td>
+          <td>{_bool_icon(row['can_view_status'])}</td>
+          <td>{_bool_icon(row['can_wake'])}</td>
+          <td>{_bool_icon(row['can_request_shutdown'])}</td>
+          <td>{_bool_icon(row['can_manage_schedule'])}</td>
+          <td>{_bool_icon(row['is_favorite'])}</td>
           <td>{_esc(row['sort_order'])}</td>
           <td>{_esc(row['created_at'])}</td>
           <td>{_esc(row['updated_at'])}</td>
@@ -2925,12 +2970,15 @@ def discovery_page(request: Request, run_id: str = "", show_docker: str = ""):
       <button type="submit">{t("action_run_discovery")}</button>
     </form>
     </article>
-    <h2>{t("heading_discovery_runs")}</h2>
+    <details open>
+    <summary><h2>{t("heading_discovery_runs")}</h2></summary>
     <article><table>
       <thead><tr><th>{t("col_run_id")}</th><th>{t("col_status")}</th><th>{t("col_summary")}</th><th>{t("col_created")}</th></tr></thead>
       <tbody>{''.join(run_rows) or _empty_row(request, 4)}</tbody>
     </table></article>
-    <h2>{t("heading_discovery_candidates")}</h2>
+    </details>
+    <details open>
+    <summary><h2>{t("heading_discovery_candidates")}</h2></summary>
     {bulk_form}
     <p style="margin-bottom:.5rem;font-size:.875rem;">
       {"" if not docker_count else (
@@ -2944,11 +2992,14 @@ def discovery_page(request: Request, run_id: str = "", show_docker: str = ""):
       <thead><tr><th>{t("col_id")}</th><th>{t("col_name")}</th><th>{t("col_mac")}</th><th>{t("col_ipv4")}</th><th>{t("col_wol_confidence")}</th><th>{t("col_source_network")}</th><th>{t("col_imported_host")}</th><th>{t("col_suggested_host")}</th><th>{t("col_actions")}</th></tr></thead>
       <tbody>{''.join(candidate_rows) or _empty_row(request, 9)}</tbody>
     </table></article>
-    <h2>Events</h2>
+    </details>
+    <details>
+    <summary><h2>{t("heading_discovery_events")}</h2></summary>
     <article><table>
       <thead><tr><th>{t("col_id")}</th><th>{t("col_action")}</th><th>{t("col_device_id")}</th><th>{t("col_detail")}</th><th>{t("col_created")}</th></tr></thead>
       <tbody>{event_rows or _empty_row(request, 5)}</tbody>
     </table></article>
+    </details>
     """
     message, error = _msg(request)
     return _layout(request, t("title_discovery"), body, admin["username"], message=message, error=error)
