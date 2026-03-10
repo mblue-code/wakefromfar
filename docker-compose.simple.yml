@@ -1,0 +1,31 @@
+services:
+  wol-backend:
+    build:
+      context: ./backend
+    env_file:
+      - .env
+    container_name: wol-backend
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      APP_SECRET: ${APP_SECRET:?APP_SECRET must be set in .env}
+      ADMIN_USER: ${ADMIN_USER:-admin}
+      ADMIN_PASS: ${ADMIN_PASS:?ADMIN_PASS must be set in .env}
+      DATA_DIR: /data
+      DB_FILENAME: wol.db
+      RATE_LIMIT_BACKEND: ${RATE_LIMIT_BACKEND:-memory}
+      RATE_LIMIT_REDIS_URL: ${RATE_LIMIT_REDIS_URL:-redis://127.0.0.1:6379/0}
+      ENFORCE_IP_ALLOWLIST: ${ENFORCE_IP_ALLOWLIST:-true}
+      IP_ALLOWLIST_CIDRS: ${IP_ALLOWLIST_CIDRS:-100.64.0.0/10,fd7a:115c:a1e0::/48,127.0.0.1/32,::1/128}
+    volumes:
+      - wol-data-simple:/data
+      - /etc/resolv.conf:/etc/resolv.conf:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=2).read()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  wol-data-simple:

@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.sqlite
+.venv/
+
+# Data and env
+.env
+/data/
+backend/data/
+data-testing/
+data-prod/
+backups/
+
+# IDE
+.idea/
+.vscode/
+.derived-data/
+
+# Android
+android-client/.gradle/
+android-client/local.properties
+android-client/**/build/

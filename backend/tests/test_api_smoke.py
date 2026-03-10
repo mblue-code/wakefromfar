@@ -1,0 +1,125 @@
+from __future__ import annotations
+
+from app.power import PowerCheckResult
+
+from .conftest import auth_headers, create_device_membership, login
+
+
+def test_new_endpoints_smoke(client, monkeypatch):
+    health_res = client.get("/health")
+    assert health_res.status_code == 200
+    assert health_res.json() == {"ok": "true"}
+    assert client.get("/hosts").status_code == 404
+    assert client.get("/admin/hosts").status_code == 404
+
+    admin_token = login(client, "admin", "adminpass123456")
+    admin_h = auth_headers(admin_token)
+
+    user_res = client.post(
+        "/admin/users",
+        headers=admin_h,
+        json={"username": "bob", "password": "bobpassword1234", "role": "user"},
+    )
+    assert user_res.status_code == 201, user_res.text
+    user_id = user_res.json()["id"]
+
+    users_res = client.get("/admin/users", headers=admin_h)
+    assert users_res.status_code == 200, users_res.text
+    assert any(row["username"] == "bob" for row in users_res.json())
+
+    device_res = client.post(
+        "/admin/devices",
+        headers=admin_h,
+        json={
+            "name": "Lab-PC",
+            "mac": "10:20:30:40:50:60",
+            "broadcast": "10.0.0.255",
+            "source_ip": "10.0.0.2",
+            "udp_port": 9,
+            "check_method": "tcp",
+            "check_target": "10.0.0.10",
+            "check_port": 3389,
+        },
+    )
+    assert device_res.status_code == 201, device_res.text
+    device_id = device_res.json()["id"]
+
+    devices_res = client.get("/admin/devices", headers=admin_h)
+    assert devices_res.status_code == 200, devices_res.text
+    assert any(row["id"] == device_id and row["source_ip"] == "10.0.0.2" for row in devices_res.json())
+
+    membership = create_device_membership(client, admin_h, user_id=user_id, device_id=device_id)
+
+    memberships_res = client.get("/admin/device-memberships", headers=admin_h)
+    assert memberships_res.status_code == 200, memberships_res.text
+    assert any(row["id"] == membership["id"] and row["device_id"] == device_id for row in memberships_res.json())
+
+    invite_res = client.post(
+        "/admin/invites",
+        headers=admin_h,
+        json={"username": "bob", "backend_url_hint": "http://relay.local", "expires_in_hours": 12},
+    )
+    assert invite_res.status_code == 410, invite_res.text
+
+    invites_res = client.get("/admin/invites", headers=admin_h)
+    assert invites_res.status_code == 410, invites_res.text
+
+    revoke_res = client.post("/admin/invites/legacy-id/revoke", headers=admin_h)
+    assert revoke_res.status_code == 410, revoke_res.text
+
+    user_token = login(client, "bob", "bobpassword1234")
+    user_h = auth_headers(user_token)
+
+    me_devices_res = client.get("/me/devices", headers=user_h)
+    assert me_devices_res.status_code == 200, me_devices_res.text
+    assert len(me_devices_res.json()) == 1
+    assert me_devices_res.json()[0]["id"] == device_id
+    assert me_devices_res.json()[0]["permissions"] == {
+        "can_view_status": True,
+        "can_wake": True,
+        "can_request_shutdown": True,
+        "can_manage_schedule": False,
+    }
+
+    monkeypatch.setattr(
+        "app.main.run_power_check",
+        lambda *_args, **_kwargs: PowerCheckResult(method="tcp", result="off", detail="timeout", latency_ms=110),
+    )
+    monkeypatch.setattr("app.main.send_magic_packet", lambda *_args, **_kwargs: None)
+
+    power_res = client.post(f"/me/devices/{device_id}/power-check", headers=user_h)
+    assert power_res.status_code == 200, power_res.text
+    assert power_res.json()["result"] == "off"
+
+    wake_res = client.post(f"/me/devices/{device_id}/wake", headers=user_h)
+    assert wake_res.status_code == 200, wake_res.text
+    assert wake_res.json()["result"] == "sent"
+
+    poke_res = client.post(
+        f"/me/devices/{device_id}/shutdown-poke",
+        headers=user_h,
+        json={"message": "finished for now"},
+    )
+    assert poke_res.status_code == 201, poke_res.text
+    poke_id = poke_res.json()["id"]
+    assert poke_res.json()["status"] == "open"
+
+    open_pokes_res = client.get("/admin/shutdown-pokes?status=open", headers=admin_h)
+    assert open_pokes_res.status_code == 200, open_pokes_res.text
+    assert any(row["id"] == poke_id for row in open_pokes_res.json())
+
+    seen_res = client.post(f"/admin/shutdown-pokes/{poke_id}/seen", headers=admin_h)
+    assert seen_res.status_code == 200, seen_res.text
+    assert seen_res.json()["status"] == "seen"
+
+    resolved_res = client.post(f"/admin/shutdown-pokes/{poke_id}/resolve", headers=admin_h)
+    assert resolved_res.status_code == 200, resolved_res.text
+    assert resolved_res.json()["status"] == "resolved"
+
+    wake_logs_res = client.get("/admin/wake-logs", headers=admin_h)
+    assert wake_logs_res.status_code == 200, wake_logs_res.text
+    assert any(row["host_id"] == device_id for row in wake_logs_res.json())
+
+    power_logs_res = client.get("/admin/power-check-logs", headers=admin_h)
+    assert power_logs_res.status_code == 200, power_logs_res.text
+    assert any(row["device_id"] == device_id for row in power_logs_res.json())
