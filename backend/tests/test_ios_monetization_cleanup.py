@@ -24,7 +24,7 @@ def test_runtime_does_not_create_ios_entitlements_table(client, tmp_path):
     assert row is None
 
 
-def test_migration_11_drops_legacy_ios_entitlements_table(tmp_path, monkeypatch):
+def test_init_db_resets_legacy_ios_entitlements_table(tmp_path, monkeypatch):
     db_path = tmp_path / "legacy.db"
     with sqlite3.connect(db_path) as conn:
         conn.execute(
@@ -56,11 +56,11 @@ def test_migration_11_drops_legacy_ios_entitlements_table(tmp_path, monkeypatch)
         row = conn.execute(
             "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'ios_entitlements'"
         ).fetchone()
-        migration = conn.execute(
-            "SELECT version FROM schema_migrations WHERE version = 11"
+        schema_migrations = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'"
         ).fetchone()
 
     get_settings.cache_clear()
 
     assert row is None
-    assert migration == (11,)
+    assert schema_migrations is None

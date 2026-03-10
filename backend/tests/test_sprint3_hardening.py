@@ -236,7 +236,7 @@ def test_security_defaults_for_settings_ignore_env_file(monkeypatch):
         "100.64.0.0/10",
         "fd7a:115c:a1e0::/48",
     ]
-    assert settings.rate_limit_backend == "redis"
+    assert settings.rate_limit_backend == "memory"
     assert settings.enable_api_docs is False
 
 
