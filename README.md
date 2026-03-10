@@ -87,6 +87,72 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compos
 
 Redis is optional. It is only needed when you want shared/distributed rate limits across multiple backend instances.
 
+## Example: GHCR Image with Traefik
+
+If you later publish a prebuilt image to GitHub Container Registry, the recommended Linux deployment pattern is still:
+
+- run the backend with `network_mode: host`
+- keep Traefik on its own network or host setup
+- route Traefik to the host endpoint through a dynamic config file instead of Docker labels
+
+Example compose file:
+
+```yaml
+services:
+  wol-backend:
+    image: ghcr.io/mblue-code/wakefromfar:latest
+    container_name: wol-backend
+    restart: unless-stopped
+    network_mode: host
+    env_file:
+      - .env
+    environment:
+      DATA_DIR: /data
+      DB_FILENAME: wol.db
+    volumes:
+      - wol-data-prod:/data
+      - /etc/resolv.conf:/etc/resolv.conf:ro
+      - /var/run/avahi-daemon/socket:/var/run/avahi-daemon/socket:ro
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=2).read()",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  wol-data-prod:
+```
+
+Example Traefik dynamic config:
+
+```yaml
+http:
+  routers:
+    wakefromfar:
+      rule: "Host(`wakefromfar.example.com`)"
+      service: wakefromfar
+      entryPoints:
+        - websecure
+      tls:
+        certResolver: cloudflare
+
+  services:
+    wakefromfar:
+      loadBalancer:
+        passHostHeader: true
+        servers:
+          - url: "http://172.18.0.1:8080"
+```
+
+This pattern keeps the backend on the Linux host network, which is the preferred path for reliable Wake-on-LAN and LAN-bound behavior. If you switch to a Traefik-label-only bridge-network model, treat that as a networking change and re-validate WoL behavior carefully.
+
 ## macOS and Docker Desktop
 
 This repo uses `network_mode: host` for the backend. That is the native and preferred path on a normal Linux Docker Engine host.
