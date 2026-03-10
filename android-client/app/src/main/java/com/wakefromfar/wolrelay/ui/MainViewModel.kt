@@ -855,8 +855,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application), P
             state.backendUrl.isNotBlank() &&
             state.adminBackgroundAlertsEnabled
         ) {
-            AdminActivityBackgroundScheduler.cancel(application)
-            AdminAlertForegroundService.start(application)
+            AdminAlertForegroundService.stop(application)
+            AdminActivityBackgroundScheduler.ensureScheduled(application)
         } else {
             AdminActivityBackgroundScheduler.cancel(application)
             AdminAlertForegroundService.stop(application)

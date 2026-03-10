@@ -4,8 +4,8 @@ import android.content.Context
 import android.os.Build
 import android.util.Base64
 import com.google.android.gms.tasks.Task
+import com.google.android.play.core.integrity.IntegrityManagerFactory
 import com.google.android.play.core.integrity.StandardIntegrityManager
-import com.google.android.play.core.integrity.StandardIntegrityManagerFactory
 import com.wakefromfar.wolrelay.BuildConfig
 import java.security.MessageDigest
 import kotlin.coroutines.resume
@@ -78,7 +78,7 @@ class PlayIntegrityStandardTokenProvider(
     context: Context,
     private val cloudProjectNumber: Long,
 ) : IntegrityTokenProvider {
-    private val integrityManager = StandardIntegrityManagerFactory.create(context.applicationContext)
+    private val integrityManager = IntegrityManagerFactory.createStandard(context.applicationContext)
     @Volatile
     private var tokenProvider: StandardIntegrityManager.StandardIntegrityTokenProvider? = null
 

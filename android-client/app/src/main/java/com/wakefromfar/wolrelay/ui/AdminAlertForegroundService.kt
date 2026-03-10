@@ -1,6 +1,7 @@
 package com.wakefromfar.wolrelay.ui
 
 import android.app.NotificationChannel
+import android.app.ForegroundServiceStartNotAllowedException
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
@@ -36,14 +37,25 @@ class AdminAlertForegroundService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        startForegroundWithStatusNotification()
-        ensurePollingLoop()
-        return START_STICKY
+        return try {
+            startForegroundWithStatusNotification()
+            ensurePollingLoop()
+            START_NOT_STICKY
+        } catch (ex: ForegroundServiceStartNotAllowedException) {
+            Log.w(TAG, "Foreground start denied; stopping admin alert service", ex)
+            stopSelfResult(startId)
+            START_NOT_STICKY
+        }
     }
 
     override fun onDestroy() {
         stopServiceWork()
         super.onDestroy()
+    }
+
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        Log.w(TAG, "Foreground service timeout reached; stopping admin alert service")
+        stopSelfResult(startId)
     }
 
     private fun ensurePollingLoop() {
