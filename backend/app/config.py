@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     app_secret: str = Field(default="change-me", alias="APP_SECRET")
-    token_expires_seconds: int = Field(default=28_800, alias="TOKEN_EXPIRES_SECONDS")
+    token_expires_seconds: int = Field(default=0, alias="TOKEN_EXPIRES_SECONDS")
 
     data_dir: Path = Field(default=Path("/data"), alias="DATA_DIR")
     db_filename: str = Field(default="wol.db", alias="DB_FILENAME")

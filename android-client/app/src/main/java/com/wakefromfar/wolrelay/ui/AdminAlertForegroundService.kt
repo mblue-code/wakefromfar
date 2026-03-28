@@ -15,8 +15,8 @@ import androidx.core.app.NotificationCompat
 import com.wakefromfar.wolrelay.MainActivity
 import com.wakefromfar.wolrelay.R
 import com.wakefromfar.wolrelay.data.ApiClient
-import com.wakefromfar.wolrelay.data.ApiException
 import com.wakefromfar.wolrelay.data.SecurePrefs
+import com.wakefromfar.wolrelay.data.isSessionInvalid
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -75,7 +75,9 @@ class AdminAlertForegroundService : Service() {
                     }
                 } catch (ex: Exception) {
                     Log.w(TAG, "Foreground admin poll failed", ex)
-                    if (isUnauthorized(ex)) {
+                    if (ex.isSessionInvalid()) {
+                        prefs.clearSession()
+                        prefs.setLastNotifiedShutdownEventId(0)
                         stopSelf()
                         break
                     }
@@ -187,14 +189,6 @@ class AdminAlertForegroundService : Service() {
             false
         }
     }
-
-    private fun isUnauthorized(ex: Exception): Boolean {
-        if (ex !is ApiException) {
-            return false
-        }
-        return ex.message?.contains("(401)") == true || ex.message?.contains("(403)") == true
-    }
-
     companion object {
         private const val TAG = "AdminAlertService"
         private const val STATUS_CHANNEL_ID = "admin_monitoring_status"

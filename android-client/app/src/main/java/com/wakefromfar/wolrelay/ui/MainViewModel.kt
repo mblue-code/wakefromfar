@@ -36,6 +36,7 @@ import com.wakefromfar.wolrelay.data.MyDeviceDto
 import com.wakefromfar.wolrelay.data.PlayIntegrityStandardTokenProvider
 import com.wakefromfar.wolrelay.data.SecurePrefs
 import com.wakefromfar.wolrelay.data.ThemeMode
+import com.wakefromfar.wolrelay.data.isSessionInvalid
 import com.wakefromfar.wolrelay.BuildConfig
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -346,6 +347,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application), P
     }
 
     fun logout() {
+        clearAuthenticatedSession(tr(R.string.info_logged_out))
+    }
+
+    private fun clearAuthenticatedSession(message: String) {
         stopAdminActivityPolling()
         resetActivityFeedPagination(clearEvents = true)
         prefs.clearSession()
@@ -354,16 +359,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application), P
         state = state.copy(
             token = null,
             userRole = null,
+            password = "",
+            claimPassword = "",
             devices = emptyList(),
             deviceSections = emptyList(),
             activityEvents = emptyList(),
             hiddenFreeDevices = 0,
+            isLoading = false,
             isActivityLoading = false,
             isActivityLoadingMore = false,
             activityHasMore = false,
-            info = tr(R.string.info_logged_out),
+            error = null,
+            info = message,
         )
         syncAdminBackgroundPolling()
+    }
+
+    private fun handleSessionFailure(ex: Exception): Boolean {
+        if (!ex.isSessionInvalid()) {
+            return false
+        }
+        clearAuthenticatedSession(tr(R.string.info_session_expired))
+        return true
     }
 
     fun refreshDevices() {
@@ -380,6 +397,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application), P
                 )
                 applyDeviceEntitlement(isLoading = false)
             } catch (ex: Exception) {
+                if (handleSessionFailure(ex)) {
+                    return@launch
+                }
                 state = state.copy(isLoading = false, error = messageOr(R.string.error_devices_load_failed, ex))
             }
         }
@@ -434,6 +454,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application), P
                     info = if (newEventsCount > 0) tr(R.string.info_new_activity_events, newEventsCount) else state.info,
                 )
             } catch (ex: Exception) {
+                if (handleSessionFailure(ex)) {
+                    return@launch
+                }
                 state = if (silentErrors) {
                     state.copy(isActivityLoading = false, isActivityLoadingMore = false)
                 } else {
@@ -480,6 +503,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application), P
                     activityHasMore = page.size >= ACTIVITY_PAGE_SIZE,
                 )
             } catch (ex: Exception) {
+                if (handleSessionFailure(ex)) {
+                    return@launch
+                }
                 state = state.copy(
                     isActivityLoadingMore = false,
                     error = messageOr(R.string.error_activity_load_failed, ex),
@@ -545,6 +571,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application), P
                     refreshActivityEvents()
                 }
             } catch (ex: Exception) {
+                if (handleSessionFailure(ex)) {
+                    return@launch
+                }
                 state = state.copy(
                     isLoading = false,
                     error = forbiddenMessageOr(ex, R.string.error_wake_not_permitted, R.string.error_wake_failed),
@@ -574,6 +603,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application), P
                     refreshActivityEvents()
                 }
             } catch (ex: Exception) {
+                if (handleSessionFailure(ex)) {
+                    return@launch
+                }
                 state = state.copy(
                     isLoading = false,
                     error = forbiddenMessageOr(
@@ -605,6 +637,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application), P
                 )
                 applyDeviceEntitlement(isLoading = false)
             } catch (ex: Exception) {
+                if (handleSessionFailure(ex)) {
+                    return@launch
+                }
                 state = state.copy(
                     isLoading = false,
                     error = messageOr(R.string.error_device_preferences_update_failed, ex),
@@ -630,6 +665,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application), P
                 state = state.copy(info = tr(R.string.info_shutdown_request_seen))
                 refreshActivityEvents()
             } catch (ex: Exception) {
+                if (handleSessionFailure(ex)) {
+                    return@launch
+                }
                 state = state.copy(isActivityLoading = false, error = messageOr(R.string.error_shutdown_request_update_failed, ex))
             }
         }
@@ -652,6 +690,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application), P
                 state = state.copy(info = tr(R.string.info_shutdown_request_resolved))
                 refreshActivityEvents()
             } catch (ex: Exception) {
+                if (handleSessionFailure(ex)) {
+                    return@launch
+                }
                 state = state.copy(isActivityLoading = false, error = messageOr(R.string.error_shutdown_request_update_failed, ex))
             }
         }

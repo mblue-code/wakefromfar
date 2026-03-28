@@ -13,8 +13,8 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.wakefromfar.wolrelay.data.ApiClient
-import com.wakefromfar.wolrelay.data.ApiException
 import com.wakefromfar.wolrelay.data.SecurePrefs
+import com.wakefromfar.wolrelay.data.isSessionInvalid
 import java.util.concurrent.TimeUnit
 import org.json.JSONObject
 
@@ -64,7 +64,9 @@ class AdminActivityPollingWorker(
             Result.success()
         } catch (ex: Exception) {
             Log.w(TAG, "Background poll failed", ex)
-            if (isUnauthorized(ex)) {
+            if (ex.isSessionInvalid()) {
+                prefs.clearSession()
+                prefs.setLastNotifiedShutdownEventId(0)
                 AdminActivityBackgroundScheduler.cancel(applicationContext)
                 return Result.success()
             }
@@ -85,14 +87,6 @@ class AdminActivityPollingWorker(
             false
         }
     }
-
-    private fun isUnauthorized(ex: Exception): Boolean {
-        if (ex !is ApiException) {
-            return false
-        }
-        return ex.message?.contains("(401)") == true || ex.message?.contains("(403)") == true
-    }
-
     private companion object {
         const val TAG = "AdminActivityWorker"
         const val SHUTDOWN_REQUEST_EVENT_TYPE = "shutdown_poke_requested"

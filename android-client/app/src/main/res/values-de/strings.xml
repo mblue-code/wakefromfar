@@ -132,6 +132,7 @@
 	    <string name="info_onboarding_success">Onboarding erfolgreich. Willkommen, %1$s.</string>
 	    <string name="error_onboarding_failed">Onboarding fehlgeschlagen.</string>
 	    <string name="info_logged_out">Ausgeloggt.</string>
+	    <string name="info_session_expired">Sitzung abgelaufen. Bitte erneut anmelden.</string>
 	    <string name="error_devices_load_failed">Geräte konnten nicht geladen werden.</string>
 	    <string name="error_device_preferences_update_failed">Geräteeinstellungen konnten nicht aktualisiert werden.</string>
 	    <string name="error_activity_load_failed">Aktivitätsereignisse konnten nicht geladen werden.</string>

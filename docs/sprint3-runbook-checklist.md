@@ -2,7 +2,7 @@
 
 ## Security Hardening
 
-- Confirm `TOKEN_EXPIRES_SECONDS=28800` (8h) in production.
+- Confirm `TOKEN_EXPIRES_SECONDS=0` in production for non-expiring mobile bearer sessions.
 - Confirm rate limits are set and monitored:
   - `LOGIN_RATE_LIMIT_PER_MINUTE`
   - `ONBOARDING_RATE_LIMIT_PER_MINUTE`

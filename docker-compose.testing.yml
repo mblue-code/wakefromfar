@@ -1,7 +1,7 @@
 services:
   wol-backend:
     environment:
-      TOKEN_EXPIRES_SECONDS: ${TOKEN_EXPIRES_SECONDS:-28800}
+      TOKEN_EXPIRES_SECONDS: ${TOKEN_EXPIRES_SECONDS:-0}
       ENFORCE_IP_ALLOWLIST: ${ENFORCE_IP_ALLOWLIST:-true}
       TRUST_PROXY_HEADERS: ${TRUST_PROXY_HEADERS:-false}
     volumes:

@@ -69,7 +69,11 @@ class SecurePrefs(context: Context) {
     }
 
     fun clearSession() {
-        prefs.edit().remove(KEY_TOKEN).apply()
+        prefs.edit()
+            .remove(KEY_TOKEN)
+            .remove(KEY_LAST_SEEN_ADMIN_ACTIVITY_EVENT_ID)
+            .remove(KEY_LAST_NOTIFIED_SHUTDOWN_EVENT_ID)
+            .apply()
     }
 
     private fun createPrefsWithRecovery(context: Context): SharedPreferences {

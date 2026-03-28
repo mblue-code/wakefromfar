@@ -368,3 +368,5 @@ class ApiException(
     message: String,
     val statusCode: Int? = null,
 ) : RuntimeException(message)
+
+internal fun Exception.isSessionInvalid(): Boolean = this is ApiException && statusCode == 401

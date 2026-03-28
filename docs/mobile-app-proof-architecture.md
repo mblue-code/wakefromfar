@@ -563,7 +563,7 @@ Response:
 ```json
 {
   "token": "jwt",
-  "expires_in": 28800
+  "expires_in": 0
 }
 ```
 

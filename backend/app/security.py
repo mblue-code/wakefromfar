@@ -36,8 +36,10 @@ def create_token(
     installation_session_version: int | None = None,
 ) -> tuple[str, int]:
     settings = get_settings()
-    expires = datetime.now(UTC) + timedelta(seconds=settings.token_expires_seconds)
-    payload = {"sub": username, "role": role, "ver": int(token_version), "exp": expires}
+    payload: dict[str, object] = {"sub": username, "role": role, "ver": int(token_version)}
+    if settings.token_expires_seconds > 0:
+        expires = datetime.now(UTC) + timedelta(seconds=settings.token_expires_seconds)
+        payload["exp"] = expires
     if installation_id:
         payload["aid"] = installation_id
     if app_proof_method:

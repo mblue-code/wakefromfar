@@ -132,6 +132,7 @@
     <string name="info_onboarding_success">Onboarding successful. Welcome %1$s.</string>
     <string name="error_onboarding_failed">Onboarding failed.</string>
     <string name="info_logged_out">Logged out.</string>
+    <string name="info_session_expired">Session expired. Please log in again.</string>
     <string name="error_devices_load_failed">Could not load devices.</string>
     <string name="error_device_preferences_update_failed">Could not update device preferences.</string>
     <string name="error_activity_load_failed">Could not load activity events.</string>
